@@ -3,6 +3,7 @@
 #include "types.h"
 #include "board.h"
 #include "zobrist.h"
+#include "moves.h"
 
 struct UndoInfo
 {
@@ -53,8 +54,10 @@ private:
         ++fullmoveNumber;
     }
 
+    void updateCastlingRights(Square start, Square end, Piece moving, Piece captured = Pieces::EMPTY);
+
 public:
-    UndoInfo makeMove(Move move);
+    UndoInfo makeMove(Move m);
     void undoMove(UndoInfo undo);
 
     // a whole bunch of getters i'm sorry

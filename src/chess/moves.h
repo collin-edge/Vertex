@@ -7,17 +7,41 @@
 struct MoveList
 {
     int count = 0;
-    
     static constexpr std::size_t MAX_MOVES = 256;
-
-    std::array<Move, MAX_MOVES> moves;
+    std::array<Move, MAX_MOVES> moves{};
 
     void append(Move move)
     {
         assert(count < MAX_MOVES);
+        moves[count++] = move;
+    }
 
-        moves[count] = move;
-        ++count;
+    Move& operator[](std::size_t index)
+    {
+        return moves[index];
+    }
+
+    const Move& operator[](std::size_t index) const
+    {
+        return moves[index];
+    }
+
+    auto begin() 
+    { 
+        return moves.begin(); 
+    }
+    auto end() 
+    {
+        return moves.begin() + count; 
+    }
+
+    auto begin() const 
+    { 
+        return moves.begin(); 
+    }
+    auto end() const 
+    { 
+        return moves.begin() + count; 
     }
 };
 
