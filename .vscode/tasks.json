@@ -1,0 +1,45 @@
+{
+    "tasks": [
+        {
+            "type": "cppbuild",
+            "label": "C/C++: cl.exe build active file",
+            "command": "cl.exe",
+            "args": [
+                "/Zi",
+                "/EHsc",
+                "/MD",
+                "/nologo",
+
+                "/std:c++17",
+
+                "/I${workspaceFolder}\\include",
+
+                "/Fo${workspaceFolder}\\bin\\",
+                "/Fe${workspaceFolder}\\bin\\vertex-mk-alpha.exe",
+
+                "${workspaceFolder}\\src\\main.cpp",
+                "${workspaceFolder}\\src\\board.cpp",
+
+                "/link",
+                "/LIBPATH:${workspaceFolder}\\lib",
+                "opengl32.lib",
+                "gdi32.lib",
+                "winmm.lib",
+                "user32.lib",
+                "shell32.lib"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [
+                "$msCompile"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "detail": ""
+        }
+    ],
+    "version": "2.0.0"
+}
