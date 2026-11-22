@@ -2,7 +2,6 @@
 
 #include "chess/move_generation/movegen.h"
 #include "chess/position.h"
-#include <string>
 
 namespace Perft
 {

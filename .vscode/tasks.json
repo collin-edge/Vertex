@@ -23,7 +23,9 @@
                 "${workspaceFolder}\\src\\chess\\move_generation\\attack_tables.cpp",
                 "${workspaceFolder}\\src\\chess\\move_generation\\attacks.cpp",
                 "${workspaceFolder}\\src\\chess\\move_generation\\movegen.cpp",
-                "${workspaceFolder}\\src\\uci\\uci.cpp",                
+                "${workspaceFolder}\\src\\uci\\uci.cpp",
+                "${workspaceFolder}\\src\\chess\\engine\\evaluation.cpp",
+                "${workspaceFolder}\\src\\chess\\engine\\search.cpp",
 
                 "/link",
                 "/LIBPATH:${workspaceFolder}\\lib",

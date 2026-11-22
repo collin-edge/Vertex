@@ -7,6 +7,7 @@
 #include "chess/move_generation/attacks.h"
 
 Position position;
+UCI uci(position);
 
 int main()
 {
@@ -15,11 +16,9 @@ int main()
     Zobrist::generate_keys();
     Attacks::buildTables();
 
-    position.constructPosition("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
-
     while (std::getline(std::cin, line))
     {
-        if (!UCI::recieveCommand(line))
+        if (!uci.receiveCommand(line))
             break;
     }
 

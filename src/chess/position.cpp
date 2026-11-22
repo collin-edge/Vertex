@@ -113,6 +113,10 @@ bool parseInt(std::string_view str, int& result)
 
 bool Position::constructPosition(std::string_view fen)
 {
+    // let's clear everything first
+
+    board.reset();
+
     std::string_view pieces = next_field(fen);
     std::string_view side = next_field(fen);
     std::string_view castling = next_field(fen);
