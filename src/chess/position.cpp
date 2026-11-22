@@ -1,5 +1,10 @@
 #include "position.h"
 
+#include "zobrist.h"
+#include "moves.h"
+#include "move_generation/movegen.h"
+#include <charconv>
+
 void Position::add(Piece piece, Square square)
 {
     board.add(piece, square);
@@ -39,7 +44,7 @@ void Position::switchTurn()
 void Position::clearCastlingRights(uint8_t rights)
 {
     zobristKey ^= Zobrist::CASTLING_RIGHTS[castlingRights];
-    castlingRights ^= rights;
+    castlingRights &= ~rights;
     zobristKey ^= Zobrist::CASTLING_RIGHTS[castlingRights];
 }
 
@@ -56,7 +61,7 @@ void Position::clearEnPassant()
     enPassant = NO_SQUARE;
 }
 
-void Position::updateCastlingRights(Square start, Square end, Piece moving, Piece captured = Pieces::EMPTY)
+void Position::updateCastlingRights(Square start, Square end, Piece moving, Piece captured)
 {
     if (Pieces::getType(moving) == PieceType::KING)
     {
@@ -81,6 +86,168 @@ void Position::updateCastlingRights(Square start, Square end, Piece moving, Piec
         if (start == 56) clearCastlingRights(BLACK_QUEENSIDE);
         if (start == 63) clearCastlingRights(BLACK_KINGSIDE);
     }
+}
+
+std::string_view next_field(std::string_view& input)
+{
+    input.remove_prefix(std::min(input.find_first_not_of(' '), input.size()));
+
+    size_t end = input.find(' ');
+
+    auto field = input.substr(0, end);
+
+    if (end == std::string_view::npos)
+        input = {};
+    else
+        input.remove_prefix(end + 1);
+
+    return field;
+}
+
+bool parseInt(std::string_view str, int& result)
+{
+    auto[ptr, ec] = std::from_chars(str.data(), str.data() + str.size(), result);
+
+    return ec == std::errc{} && ptr == str.data() + str.size();
+}
+
+bool Position::constructPosition(std::string_view fen)
+{
+    std::string_view pieces = next_field(fen);
+    std::string_view side = next_field(fen);
+    std::string_view castling = next_field(fen);
+    std::string_view ep = next_field(fen);
+    std::string_view halfmove = next_field(fen);
+    std::string_view fullmove = next_field(fen);
+
+    if (pieces.empty() || side.empty() || castling.empty() || ep.empty() || halfmove.empty() || fullmove.empty() || !fen.empty())
+    {
+        return false;
+    }
+
+    int file = 0;
+    int rank = 7;
+
+    int whiteKings = 0;
+    int blackKings = 0;
+
+    for (int i = 0; i < pieces.size(); ++i)
+    {
+        if (pieces[i] == '/')
+        {
+            if (file != 8)
+                return false;
+
+            file = 0;
+
+            if (rank == 0) 
+                return false;
+
+            --rank;
+        }
+        else if (std::isdigit(static_cast<unsigned char>(pieces[i])))
+        {
+            int dig = pieces[i] - '0';
+            if (dig < 1 || dig > 8 || file + dig > 8) return false;
+            file += dig;
+        }
+        else
+        {
+            Piece toadd;
+            switch(pieces[i])
+            {
+                case 'K': toadd = Pieces::makePiece(Color::WHITE, PieceType::KING); break;
+                case 'P': toadd = Pieces::makePiece(Color::WHITE, PieceType::PAWN); break;
+                case 'N': toadd = Pieces::makePiece(Color::WHITE, PieceType::KNIGHT); break;
+                case 'B': toadd = Pieces::makePiece(Color::WHITE, PieceType::BISHOP); break;
+                case 'R': toadd = Pieces::makePiece(Color::WHITE, PieceType::ROOK); break;
+                case 'Q': toadd = Pieces::makePiece(Color::WHITE, PieceType::QUEEN); break;
+                case 'k': toadd = Pieces::makePiece(Color::BLACK, PieceType::KING); break;
+                case 'p': toadd = Pieces::makePiece(Color::BLACK, PieceType::PAWN); break;
+                case 'n': toadd = Pieces::makePiece(Color::BLACK, PieceType::KNIGHT); break;
+                case 'b': toadd = Pieces::makePiece(Color::BLACK, PieceType::BISHOP); break;
+                case 'r': toadd = Pieces::makePiece(Color::BLACK, PieceType::ROOK); break;
+                case 'q': toadd = Pieces::makePiece(Color::BLACK, PieceType::QUEEN); break;
+                default: return false;
+            }
+
+            if (toadd == Pieces::makePiece(Color::WHITE, PieceType::KING)) ++whiteKings;
+            if (toadd == Pieces::makePiece(Color::BLACK, PieceType::KING)) ++blackKings;
+
+            add(toadd, rank * 8 + file);
+            if (file > 7) return false;
+            ++file;
+        }
+    }
+
+    if (whiteKings != 1 || blackKings != 1) return false;
+
+    if (side == "w" || side == "b")
+        sideToMove = (side == "w") ? Color::WHITE : Color::BLACK;
+    else 
+        return false;
+
+    if (castling != "-")
+    {
+        int previousPriority = 0;
+
+        for (char c : castling)
+        {
+            int priority = 0;
+            switch (c)
+            {
+                case 'K': priority = 1; break;
+                case 'Q': priority = 2; break;
+                case 'k': priority = 3; break;
+                case 'q': priority = 4; break;
+            }
+
+            if (priority == 0) return false;
+            if (priority <= previousPriority) return false;
+
+            previousPriority = priority;
+        }
+
+        // now that it'd a valid castling string
+
+        for (char c : castling)
+        {
+            switch (c)
+            {
+                case 'K': castlingRights |= WHITE_KINGSIDE; break;
+                case 'Q': castlingRights |= WHITE_QUEENSIDE; break;
+                case 'k': castlingRights |= BLACK_KINGSIDE; break;
+                case 'q': castlingRights |= BLACK_QUEENSIDE; break;
+            }
+        }
+    }
+
+    if (ep != "-")
+    {
+        if (ep.size() != 2)
+            return false;
+
+        int file = ep[0] - 'a';
+        int rank = ep[1] - '1';
+
+        if (file >= 0 && file < 8 && (rank == 2 || rank == 5))
+        {
+            enPassant = rank * 8 + file;
+        } else {
+            return false;
+        }
+    }
+
+    if (!parseInt(halfmove, halfmoveClock))
+        return false;
+
+    if (!parseInt(fullmove, fullmoveNumber))
+        return false;
+
+    if (halfmoveClock < 0 || fullmoveNumber < 1)
+        return false;
+
+    return true;
 }
 
 UndoInfo Position::makeMove(Move m)
@@ -122,11 +289,13 @@ UndoInfo Position::makeMove(Move m)
                 setEnPassant(end);
                 break;
             case MovePacker::Flag::EN_PASSANT:
+            {
                 Square capturedSquare = end + (sideToMove == Color::WHITE ? -8 : 8);
                 undo.capturedPiece = getPiece(capturedSquare);
                 remove(capturedSquare);
 
                 break;
+            }
             case MovePacker::Flag::CASTLE_KINGSIDE:
                 if (sideToMove == Color::WHITE)
                     move(7, end - 1);
@@ -149,7 +318,7 @@ UndoInfo Position::makeMove(Move m)
     else
         ++halfmoveClock;
 
-    updateCastlingRights(start, end, captured);
+    updateCastlingRights(start, end, movingPiece, captured);
     switchTurn();
 
     return undo;

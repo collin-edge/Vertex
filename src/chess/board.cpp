@@ -34,14 +34,3 @@ void Board::remove(Square square)
     bitboards[idx] &= ~(1ULL << square);
     occupied[idx / 6] &= ~(1ULL << square);
 }
-
-void Board::move(Square start, Square end)
-{
-    if (start == end || mailbox[start] == Pieces::EMPTY)
-        return;
-
-    Piece piece = mailbox[start];
-
-    remove(start);
-    add(piece, end);
-}

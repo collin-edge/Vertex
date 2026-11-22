@@ -48,7 +48,6 @@ public:
 
     void add(Piece piece, Square square);
     void remove(Square square);
-    void move(Square start, Square end);
 
     Piece get(Square square) const
     {

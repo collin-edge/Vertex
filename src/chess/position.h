@@ -2,8 +2,8 @@
 
 #include "types.h"
 #include "board.h"
-#include "zobrist.h"
-#include "moves.h"
+#include <sstream>
+#include <string_view>
 
 struct UndoInfo
 {
@@ -57,6 +57,8 @@ private:
     void updateCastlingRights(Square start, Square end, Piece moving, Piece captured = Pieces::EMPTY);
 
 public:
+    bool constructPosition(std::string_view fen);
+
     UndoInfo makeMove(Move m);
     void undoMove(UndoInfo undo);
 

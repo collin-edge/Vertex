@@ -20,6 +20,10 @@
                 "${workspaceFolder}\\src\\main.cpp",
                 "${workspaceFolder}\\src\\chess\\board.cpp",
                 "${workspaceFolder}\\src\\chess\\position.cpp",
+                "${workspaceFolder}\\src\\chess\\move_generation\\attack_tables.cpp",
+                "${workspaceFolder}\\src\\chess\\move_generation\\attacks.cpp",
+                "${workspaceFolder}\\src\\chess\\move_generation\\movegen.cpp",
+                "${workspaceFolder}\\src\\uci\\uci.cpp",                
 
                 "/link",
                 "/LIBPATH:${workspaceFolder}\\lib",

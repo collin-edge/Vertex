@@ -9,7 +9,7 @@ using Square = uint8_t;
 using Piece = uint8_t;
 using Move = uint16_t;
 
-Square NO_SQUARE = 64; // since squares range from 0-63, 64 can be the integer for no square.
+constexpr Square NO_SQUARE = 64; // since squares range from 0-63, 64 can be the integer for no square.
 
 enum class Color : uint8_t
 {
