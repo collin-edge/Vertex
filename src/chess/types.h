@@ -7,7 +7,9 @@
 using Bitboard = uint64_t;
 using Square = uint8_t;
 using Piece = uint8_t;
+
 using Move = uint16_t;
+constexpr Move NO_MOVE = UINT16_MAX;
 
 constexpr Square NO_SQUARE = 64; // since squares range from 0-63, 64 can be the integer for no square.
 

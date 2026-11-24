@@ -34,5 +34,6 @@ namespace MoveGenerator
     void rook(MoveList& moves, const Position& position, const MoveGenInfo& info);
     void queen(MoveList& moves, const Position& position, const MoveGenInfo& info);
 
-    MoveList generateLegalMoves(const Position& position);
+    void generateLegalMoves(const Position& position, MoveGenInfo info, MoveList& moves);
+    void generateTacticalMoves(const Position& position, MoveGenInfo info, MoveList& moves);
 };

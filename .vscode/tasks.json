@@ -24,8 +24,10 @@
                 "${workspaceFolder}\\src\\chess\\move_generation\\attacks.cpp",
                 "${workspaceFolder}\\src\\chess\\move_generation\\movegen.cpp",
                 "${workspaceFolder}\\src\\uci\\uci.cpp",
-                "${workspaceFolder}\\src\\chess\\engine\\evaluation.cpp",
+                "${workspaceFolder}\\src\\chess\\engine\\evaluation\\evaluation.cpp",
                 "${workspaceFolder}\\src\\chess\\engine\\search.cpp",
+                "${workspaceFolder}\\src\\chess\\engine\\move_ordering.cpp",
+                "${workspaceFolder}\\src\\chess\\engine\\search_stack.cpp",
 
                 "/link",
                 "/LIBPATH:${workspaceFolder}\\lib",

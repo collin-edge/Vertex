@@ -220,7 +220,9 @@ bool UCI::parsePositionCommand(std::istringstream& token)
     {
         Move move = newMoves[i];
 
-        MoveList legalMoves = MoveGenerator::generateLegalMoves(candidate);
+        MoveGenInfo info = MoveGenerator::calculateInfo(candidate);
+        MoveList legalMoves;
+        MoveGenerator::generateLegalMoves(candidate, info, legalMoves);
 
         bool legal = false;
 

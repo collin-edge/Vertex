@@ -345,9 +345,9 @@ void MoveGenerator::pawn(MoveList& moves, const Position& position, const MoveGe
                     MovePacker::Flag::QUEEN
                 };
 
-                for (int i = 0; i < 4; ++i)
+                for (auto promotion : promotions)
                 {
-                    moves.append(MovePacker::encodeMove(square, end, promotions[i]));
+                    moves.append(MovePacker::encodeMove(square, end, promotion));
                 }
             }
             else
@@ -467,16 +467,14 @@ void MoveGenerator::queen(MoveList& moves, const Position& position, const MoveG
 
 // and then the generate everything function
 
-MoveList MoveGenerator::generateLegalMoves(const Position& position)
+void MoveGenerator::generateLegalMoves(const Position& position, MoveGenInfo info, MoveList& moves)
 {
-    MoveList moves;
-
-    MoveGenInfo info = calculateInfo(position);
+    moves.count = 0;
 
     if (info.checkerCount() >= 2)
     {
         king(moves, position, info);
-        return moves;
+        return;
     }
 
     king(moves, position, info);
@@ -485,6 +483,106 @@ MoveList MoveGenerator::generateLegalMoves(const Position& position)
     bishop(moves, position, info);
     rook(moves, position, info);
     queen(moves, position, info);
+}
 
-    return moves;
+// Quiescence search is based on attacks to make the position quiet- so we can make it easier by only generating attacks
+void MoveGenerator::generateTacticalMoves(const Position& position, MoveGenInfo info, MoveList& moves)
+{
+    Color sideToMove = position.getSideToMove();
+    Bitboard possible;
+    Bitboard occupied = position.getOccupied();
+    Bitboard friendlyPieces = position.getOccupied(sideToMove);
+    Bitboard enemyPieces = position.getOccupied((sideToMove == Color::WHITE) ? Color::BLACK : Color::WHITE);
+
+    while (friendlyPieces)
+    {
+        unsigned long target;
+        _BitScanForward64(&target, friendlyPieces);
+
+        possible = 0;
+
+        switch(Pieces::getType(position.getPiece(target)))
+        {
+            case PieceType::KING:
+                possible |= Attacks::getKingAttacks(info.kingSquare) & enemyPieces & ~info.kingAttackers; break;
+            case PieceType::PAWN:
+            {
+                Bitboard captures = Attacks::getPawnAttacks(sideToMove, target) & enemyPieces & info.evasionMask & info.pinMasks[target];
+
+                int promotionRank = (sideToMove == Color::WHITE) ? 7 : 0;
+
+                while (captures)
+                {
+                    unsigned long destination;
+                    _BitScanForward64(&destination, captures);
+
+                    if (destination / 8 == promotionRank)
+                    {
+                        const MovePacker::Flag promotions[4] = {
+                            MovePacker::Flag::KNIGHT,
+                            MovePacker::Flag::BISHOP,
+                            MovePacker::Flag::ROOK,
+                            MovePacker::Flag::QUEEN
+                        };
+
+                        for (auto promotion : promotions)
+                        {
+                            moves.append(MovePacker::encodeMove(target, destination, promotion));
+                        }
+                    }
+                    else
+                    {
+                        moves.append(MovePacker::encodeMove(target, destination));
+                    }
+
+                    captures &= captures - 1;
+                }
+
+                int direction = (sideToMove == Color::WHITE) ? 8 : -8;
+                int destination = static_cast<int>(target) + direction;
+
+                if (destination >= 0 && destination < 64)
+                {
+                    int promotionRank = (sideToMove == Color::WHITE) ? 7 : 0;
+
+                    if (destination / 8 == promotionRank &&
+                        !(occupied & (1ULL << destination)) &&
+                        (info.evasionMask & (1ULL << destination)) &&
+                        (info.pinMasks[target] & (1ULL << destination)))
+                    {
+                        const MovePacker::Flag promotions[4] = {
+                            MovePacker::Flag::KNIGHT,
+                            MovePacker::Flag::BISHOP,
+                            MovePacker::Flag::ROOK,
+                            MovePacker::Flag::QUEEN
+                        };
+
+                        for (auto promotion : promotions)
+                        {
+                            moves.append(MovePacker::encodeMove(target, destination, promotion));
+                        }
+                    }
+                }
+
+                checkEnPassant(moves, position, info, target);
+
+                break;
+            }
+
+            case PieceType::KNIGHT:
+                possible |= Attacks::getKnightAttacks(target) & enemyPieces & info.evasionMask & info.pinMasks[target]; break;
+            case PieceType::BISHOP:
+                possible |= Attacks::getBishopAttacks(target, occupied) & enemyPieces & info.evasionMask & info.pinMasks[target]; break;
+            case PieceType::ROOK:
+                possible |= Attacks::getRookAttacks(target, occupied) & enemyPieces & info.evasionMask & info.pinMasks[target]; break;
+            case PieceType::QUEEN:
+                possible |= Attacks::getBishopAttacks(target, occupied) & enemyPieces & info.evasionMask & info.pinMasks[target];
+                possible |= Attacks::getRookAttacks(target, occupied) & enemyPieces & info.evasionMask & info.pinMasks[target];
+                break;
+        }
+
+        addToList(moves, possible, target);
+            
+        friendlyPieces &= friendlyPieces - 1;
+    }
 }
