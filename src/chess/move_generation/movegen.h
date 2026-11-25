@@ -23,17 +23,23 @@ struct MoveGenInfo
     }
 };
 
+enum class MoveGenType
+{
+    ALL,
+    TACTICAL,
+    QUIETS
+};
+
 namespace MoveGenerator
 {
     MoveGenInfo calculateInfo(const Position& position);
 
-    void king(MoveList& moves, const Position& position, const MoveGenInfo& info);
-    void pawn(MoveList& moves, const Position& position, const MoveGenInfo& info);
-    void knight(MoveList& moves, const Position& position, const MoveGenInfo& info);
-    void bishop(MoveList& moves, const Position& position, const MoveGenInfo& info);
-    void rook(MoveList& moves, const Position& position, const MoveGenInfo& info);
-    void queen(MoveList& moves, const Position& position, const MoveGenInfo& info);
+    void king(MoveList& moves, const Position& position, const MoveGenInfo& info, MoveGenType type);
+    void pawn(MoveList& moves, const Position& position, const MoveGenInfo& info, MoveGenType type);
+    void knight(MoveList& moves, const Position& position, const MoveGenInfo& info, MoveGenType type);
+    void bishop(MoveList& moves, const Position& position, const MoveGenInfo& info, MoveGenType type);
+    void rook(MoveList& moves, const Position& position, const MoveGenInfo& info, MoveGenType type);
+    void queen(MoveList& moves, const Position& position, const MoveGenInfo& info, MoveGenType type);
 
-    void generateLegalMoves(const Position& position, MoveGenInfo info, MoveList& moves);
-    void generateTacticalMoves(const Position& position, MoveGenInfo info, MoveList& moves);
+    void generateLegalMoves(const Position& position, MoveGenInfo info, MoveList& moves, MoveGenType type);
 };

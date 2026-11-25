@@ -10,6 +10,8 @@ namespace MoveOrdering
     void orderMoves(MoveList& moves, const Position& position, Move ttMove, const int history [2][64][64], const Move* killerMoves = nullptr);
     int scoreMove(Move move, const Position& position, Move ttMove, const int history [2][64][64], const Move* killerMoves = nullptr);
 
+    int scoreTactical(Move move, const Position& position);
+
     constexpr int pieceValue(PieceType piece)
     {
         switch (piece)

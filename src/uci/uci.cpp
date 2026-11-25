@@ -222,7 +222,7 @@ bool UCI::parsePositionCommand(std::istringstream& token)
 
         MoveGenInfo info = MoveGenerator::calculateInfo(candidate);
         MoveList legalMoves;
-        MoveGenerator::generateLegalMoves(candidate, info, legalMoves);
+        MoveGenerator::generateLegalMoves(candidate, info, legalMoves, MoveGenType::ALL);
 
         bool legal = false;
 

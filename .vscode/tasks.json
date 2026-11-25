@@ -27,7 +27,8 @@
                 "${workspaceFolder}\\src\\chess\\engine\\evaluation\\evaluation.cpp",
                 "${workspaceFolder}\\src\\chess\\engine\\search.cpp",
                 "${workspaceFolder}\\src\\chess\\engine\\move_ordering.cpp",
-                "${workspaceFolder}\\src\\chess\\engine\\search_stack.cpp",
+                "${workspaceFolder}\\src\\chess\\engine\\objects\\search_stack.cpp",
+                "${workspaceFolder}\\src\\chess\\engine\\objects\\search_heuristics.cpp",
 
                 "/link",
                 "/LIBPATH:${workspaceFolder}\\lib",

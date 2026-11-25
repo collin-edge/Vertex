@@ -2,6 +2,7 @@
 #include <string>
 
 #include "uci/uci.h"
+#include "perft.h"
 #include "chess/position.h"
 #include "chess/zobrist.h"
 #include "chess/move_generation/attacks.h"

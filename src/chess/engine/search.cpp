@@ -3,7 +3,6 @@
 #include <iostream>
 #include <utility>
 #include <chrono>
-#include <cstdlib>
 
 constexpr int INF = 32000;
 constexpr int MATE_SCORE = 10000;
@@ -30,13 +29,6 @@ int normalizeFromTT(int score, int ply, int MAX_PLY)
     return score;
 }
 
-void updateHistory(int& historyScore, int bonus)
-{
-    constexpr int HISTORY_MAX = 500;
-
-    historyScore += bonus - ((historyScore * std::abs(bonus)) / HISTORY_MAX);
-}
-
 int Search::search(Position& position, int depth, int alpha, int beta, int ply)
 {
     if (stopSearch.load(std::memory_order_relaxed))
@@ -48,11 +40,14 @@ int Search::search(Position& position, int depth, int alpha, int beta, int ply)
     uint64_t key = position.getZobristKey();
     TTEntry ttEntry;
 
+    Move ttMove = NO_MOVE;
+
     if (transposition.probe(key, ttEntry))
     {
-        if (ttEntry.depth >= depth && ttEntry.searchType == TTSearchType::NORMAL)
+        ttMove = ttEntry.bestMove;
+        if (ttEntry.depth >= depth)
         {
-            int ttscore = normalizeFromTT(ttEntry.score, ply, MAX_PLY);
+            int ttscore = normalizeFromTT(ttEntry.score, ply, SearchConfig::MAX_PLY);
             
             if (ttEntry.bound == TTBound::EXACT) 
                 return ttscore;
@@ -63,9 +58,7 @@ int Search::search(Position& position, int depth, int alpha, int beta, int ply)
         }
     }
 
-    Move ttMove = ttEntry.bestMove;
-
-    if (ply >= MAX_PLY - 1)
+    if (ply >= SearchConfig::MAX_PLY - 1)
         return Evaluation::evaluate(position);
 
     if (depth <= 0)
@@ -73,38 +66,25 @@ int Search::search(Position& position, int depth, int alpha, int beta, int ply)
         
     SearchStack& ss = stack[ply];
 
-    MoveList& moves = ss.moves;
-    moves.count = 0;
-
     MoveGenInfo info = MoveGenerator::calculateInfo(position);
-    MoveGenerator::generateLegalMoves(position, info, moves);
+
+    ss.resetMovePicker();
 
     int bestScore = -INF;
     Move bestMove = NO_MOVE;
-
-    if (moves.count == 0)
-    {
-        if (info.checkerCount() > 0)
-            return -MATE_SCORE + ply;
-
-        return 0;
-    }
-
-    ss.resetMovePicker();
-    for (int i = 0; i < ss.moves.count; ++i)
-    {
-        ss.setMoveScore(i, MoveOrdering::scoreMove(ss.moves[i], position, ttMove, history, ss.killerMoves));
-    }
+    bool foundMove = false;
 
     Move quietMovesSearched[MoveList::MAX_MOVES];
     int quietMoveCount = 0;
 
     while (true)
     {
-        Move m = ss.nextMove();
+        Move m = ss.nextMove(position, info, ttMove, heuristics, ply);
 
         if (m == NO_MOVE)
             break;
+
+        foundMove = true;
 
         UndoInfo undo = position.makeMove(m);
 
@@ -125,37 +105,55 @@ int Search::search(Position& position, int depth, int alpha, int beta, int ply)
             alpha = score;
 
         Square end = MovePacker::getEnd(m);
+        Square start = MovePacker::getStart(m);
         auto flag = MovePacker::getFlag(m);
-        bool quiet = (position.getPiece(end) == Pieces::EMPTY && flag != MovePacker::Flag::EN_PASSANT && !MovePacker::isPromotion(flag));
+
+        Piece captured = position.getPiece(end);
+
+        bool quiet = captured == Pieces::EMPTY && flag != MovePacker::Flag::EN_PASSANT && !MovePacker::isPromotion(flag);
 
         if (alpha >= beta)
         {
             if (quiet)
             {
-                Square start = MovePacker::getStart(m);
-                updateKillers(ply, m);
-
-                int col = (position.getSideToMove() == Color::WHITE) ? 0 : 1;
+                heuristics.updateKillers(ply, m);
 
                 int bonus = depth * depth;
-                updateHistory(history[col][start][end], bonus);
 
-                for (int i = 0; i < quietMoveCount; i++)
+                heuristics.updateHistory(
+                    position.getSideToMove(),
+                    start,
+                    end,
+                    bonus
+                );
+
+                for (int i = 0; i < quietMoveCount; ++i)
                 {
                     Move previous = quietMovesSearched[i];
 
-                    int penalty = -bonus;
-                    updateHistory(history[col][MovePacker::getStart(previous)][MovePacker::getEnd(previous)], penalty);
+                    heuristics.updateHistory(
+                        position.getSideToMove(),
+                        MovePacker::getStart(previous),
+                        MovePacker::getEnd(previous),
+                        -bonus
+                    );
                 }
             }
 
             break;
-        } 
+        }
         else if (quiet)
         {
-            quietMovesSearched[quietMoveCount] = m;
-            ++quietMoveCount;
+            quietMovesSearched[quietMoveCount++] = m;
         }
+    }
+
+    if (!foundMove)
+    {
+        if (info.checkerCount() > 0)
+            return -MATE_SCORE + ply;
+
+        return 0;
     }
 
     // now store in tt
@@ -166,13 +164,11 @@ int Search::search(Position& position, int depth, int alpha, int beta, int ply)
     else if (bestScore >= beta) bound = TTBound::LOWER_BOUND;
 
     transposition.store({
-        key, 
-        bestMove, 
-        static_cast<int16_t>(normalizeToTT(bestScore, ply, MAX_PLY)), 
-        static_cast<uint8_t>(depth), 
-        bound, 
-        TTSearchType::NORMAL, 
-        true
+        key,
+        bestMove,
+        static_cast<int16_t>(normalizeToTT(bestScore, ply, SearchConfig::MAX_PLY)),
+        static_cast<uint8_t>(depth),
+        bound
     });
 
     return bestScore;
@@ -185,38 +181,38 @@ int Search::quiescence(Position& position, int alpha, int beta, int ply, int qpl
 
     ++nodes;
 
-    if (ply >= MAX_PLY - 1)
-        return Evaluation::evaluate(position); // i feel like there's no way in hell that'd ever happen, but just incase
+    if (ply >= SearchConfig::MAX_PLY - 1)
+        return Evaluation::evaluate(position);
 
     int originalAlpha = alpha;
+
     uint64_t key = position.getZobristKey();
-    TTEntry ttEntry;
-
-    int remainingDepth = std::max(0, MAX_QUIESCENCE_DEPTH - qply);
-
-    if (transposition.probe(key, ttEntry))
-    {
-        
-        if (ttEntry.depth >= remainingDepth && ttEntry.searchType == TTSearchType::QUIESCENCE)
-        {
-            int ttscore = normalizeFromTT(ttEntry.score, ply, MAX_PLY);
-            
-            if (ttEntry.bound == TTBound::EXACT) 
-                return ttscore;
-            if (ttEntry.bound == TTBound::LOWER_BOUND) 
-                if (ttscore >= beta) return ttscore;
-            if (ttEntry.bound == TTBound::UPPER_BOUND)
-                if (ttscore <= alpha) return ttscore;
-        }
-    }
-
-    Move ttMove = ttEntry.bestMove;
 
     MoveGenInfo info = MoveGenerator::calculateInfo(position);
     bool inCheck = (info.checkerCount() > 0);
 
-    if (qply >= MAX_QUIESCENCE_DEPTH && !inCheck)
-        return Evaluation::evaluate(position);
+    int remainingDepth = std::max(0, MAX_QUIESCENCE_DEPTH - qply);
+
+    QTTMode mode = inCheck ? QTTMode::IN_CHECK : QTTMode::NORMAL;
+
+    bool cacheable = qply < MAX_QUIESCENCE_DEPTH;
+
+    QTTEntry ttEntry;
+
+    if (cacheable && quiescence_tt.probe(key, mode, ttEntry))
+    {
+        if (ttEntry.depth >= remainingDepth)
+        {
+            int ttScore = normalizeFromTT(ttEntry.score, ply, SearchConfig::MAX_PLY);
+
+            if (ttEntry.bound == TTBound::EXACT)
+                return ttScore;
+            if (ttEntry.bound == TTBound::LOWER_BOUND && ttScore >= beta)
+                return ttScore;
+            if (ttEntry.bound == TTBound::UPPER_BOUND && ttScore <= alpha)
+                return ttScore;
+        }
+    }
 
     int bestScore = -INF;
 
@@ -226,15 +222,16 @@ int Search::quiescence(Position& position, int alpha, int beta, int ply, int qpl
 
         if (standPat >= beta)
         {
-            transposition.store({
-                key, 
-                NO_MOVE, 
-                static_cast<int16_t>(normalizeToTT(standPat, ply, MAX_PLY)), 
-                static_cast<uint8_t>(remainingDepth), 
-                TTBound::LOWER_BOUND, 
-                TTSearchType::QUIESCENCE, 
-                true
-            });
+            if (cacheable)
+            {
+                quiescence_tt.store({
+                    key,
+                    static_cast<int16_t>(normalizeToTT(standPat, ply, SearchConfig::MAX_PLY)),
+                    static_cast<uint8_t>(remainingDepth),
+                    TTBound::LOWER_BOUND,
+                    mode
+                });
+            }
 
             return standPat;
         }
@@ -243,45 +240,28 @@ int Search::quiescence(Position& position, int alpha, int beta, int ply, int qpl
             alpha = standPat;
 
         bestScore = standPat;
+
+        if (qply >= MAX_QUIESCENCE_DEPTH)
+            return bestScore;
     }
 
     SearchStack& ss = stack[ply];
-    MoveList& moves = ss.moves;
-    moves.count = 0;
-
-    if (inCheck)
-        MoveGenerator::generateLegalMoves(position, info, moves);
-    else
-        MoveGenerator::generateTacticalMoves(position, info, moves);
-
-    if (moves.count == 0)
-    {
-        if (inCheck)
-            return -MATE_SCORE + ply;
-
-        return bestScore;
-    }
-
     ss.resetMovePicker();
-    for (int i = 0; i < ss.moves.count; ++i)
-    {
-        ss.setMoveScore(i, MoveOrdering::scoreMove(ss.moves[i], position, ttMove, history, ss.killerMoves));
-    }
 
-    Move bestMove = NO_MOVE;
+    bool foundMove = false;
 
     while (true)
     {
-        Move m = ss.nextMove();
+        Move m = ss.quiescenceNextMove(position, info, inCheck);
 
         if (m == NO_MOVE)
             break;
 
+        foundMove = true;
+
         UndoInfo undo = position.makeMove(m);
 
-        int score = -quiescence(
-            position, -beta, -alpha, ply + 1, qply + 1
-        );
+        int score = -quiescence(position, -beta, -alpha, ply + 1, qply + 1);
 
         position.undoMove(undo);
 
@@ -289,10 +269,7 @@ int Search::quiescence(Position& position, int alpha, int beta, int ply, int qpl
             return 0;
 
         if (score > bestScore)
-        {
             bestScore = score;
-            bestMove = m;
-        }
 
         if (score > alpha)
             alpha = score;
@@ -301,22 +278,26 @@ int Search::quiescence(Position& position, int alpha, int beta, int ply, int qpl
             break;
     }
 
-    // now store in tt
+    if (inCheck && !foundMove)
+        return -MATE_SCORE + ply;
 
-    TTBound bound = TTBound::EXACT;
+    if (cacheable)
+    {
+        TTBound bound = TTBound::EXACT;
 
-    if (bestScore <= originalAlpha) bound = TTBound::UPPER_BOUND;
-    else if (bestScore >= beta) bound = TTBound::LOWER_BOUND;
+        if (bestScore <= originalAlpha)
+            bound = TTBound::UPPER_BOUND;
+        else if (bestScore >= beta)
+            bound = TTBound::LOWER_BOUND;
 
-    transposition.store({
-        key, 
-        bestMove, 
-        static_cast<int16_t>(normalizeToTT(bestScore, ply, MAX_PLY)), 
-        static_cast<uint8_t>(remainingDepth), 
-        bound, 
-        TTSearchType::QUIESCENCE, 
-        true
-    });
+        quiescence_tt.store({
+            key,
+            static_cast<int16_t>(normalizeToTT(bestScore, ply, SearchConfig::MAX_PLY)),
+            static_cast<uint8_t>(remainingDepth),
+            bound,
+            mode
+        });
+    }
 
     return bestScore;
 }
@@ -327,68 +308,45 @@ Move Search::findBestMove(const Position& position, SearchLimits l)
 
     Position copy = position;
     limits = l;
-
     nodes = 0;
 
-    SearchStack& root = stack[0];
-    root.moves.count = 0;
+    transposition.newSearch();
+    quiescence_tt.newSearch();
+    heuristics.clearKillers();
 
-    MoveGenInfo info = MoveGenerator::calculateInfo(copy);
-    MoveGenerator::generateLegalMoves(copy, info, root.moves);
-
-    MoveList& moves = root.moves;
-
-    if (moves.count == 0)
-    {
-        if (info.checkerCount() > 0)
-            return -MATE_SCORE;
-
-        return 0;
-    }
-
-    for (int ply = 0; ply < MAX_PLY; ply++)
-    {
-        stack[ply].killerMoves[0] = NO_MOVE;
-        stack[ply].killerMoves[1] = NO_MOVE;
-    }
-
-    uint64_t key = position.getZobristKey();
+    uint64_t key = copy.getZobristKey();
     TTEntry ttEntry;
 
-    transposition.probe(key, ttEntry);
+    Move ttMove = NO_MOVE;
 
-    Move ttMove = ttEntry.bestMove;
+    if (transposition.probe(key, ttEntry))
+        ttMove = ttEntry.bestMove;
 
-    Move bestMove = moves[0];
+    Move bestMove = NO_MOVE;
+
     int maxDepth = limits.depth > 0 ? limits.depth : 64;
 
-    for (int depth = 1; depth <= maxDepth; depth++)
+    for (int depth = 1; depth <= maxDepth; ++depth)
     {
         auto iterationStart = std::chrono::steady_clock::now();
 
         if (stopSearch.load(std::memory_order_relaxed))
             break;
 
+        SearchStack& root = stack[0];
+
+        MoveGenInfo info = MoveGenerator::calculateInfo(copy);
+
         root.resetMovePicker();
-
-        for (int i = 0; i < moves.count; ++i)
-        {
-            int score = MoveOrdering::scoreMove(moves[i], copy, ttMove, history, root.killerMoves);
-
-            if (moves[i] == bestMove)
-                score = 950000;
-
-            root.setMoveScore(i, score);
-        }
 
         int bestScore = -INF;
         int alpha = -INF;
 
-        Move iterationBestMove = bestMove;
+        Move iterationBestMove = NO_MOVE;
 
         while (true)
         {
-            Move m = root.nextMove();
+            Move m = root.nextMove(copy, info, ttMove, heuristics, 0);
 
             if (m == NO_MOVE)
                 break;
@@ -417,7 +375,10 @@ Move Search::findBestMove(const Position& position, SearchLimits l)
 
         bestMove = iterationBestMove;
 
+        ttMove = bestMove;
+
         auto iterationEnd = std::chrono::steady_clock::now();
+
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(iterationEnd - iterationStart).count();
 
         if (DEBUG)
@@ -433,18 +394,8 @@ Move Search::findBestMove(const Position& position, SearchLimits l)
 
     return bestMove;
 }
+
 void Search::stop()
 {
     stopSearch.store(true, std::memory_order_relaxed);
-}
-
-void Search::updateKillers(int ply, Move move)
-{
-    SearchStack& ss = stack[ply];
-
-    if (ss.killerMoves[0] == move)
-        return;
-
-    ss.killerMoves[1] = ss.killerMoves[0];
-    ss.killerMoves[0] = move;
 }

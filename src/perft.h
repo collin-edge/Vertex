@@ -10,7 +10,10 @@ namespace Perft
         if (depth == 0)
             return 1;
 
-        MoveList moves = MoveGenerator::generateLegalMoves(position);
+        MoveList moves;
+
+        MoveGenInfo info = MoveGenerator::calculateInfo(position);
+        MoveGenerator::generateLegalMoves(position, info, moves, MoveGenType::ALL);
 
         uint64_t nodes = 0;
 

@@ -198,9 +198,10 @@ void addToList(MoveList& moves, uint64_t possible, Square square)
     }
 }
 
-void MoveGenerator::king(MoveList& moves, const Position& position, const MoveGenInfo& info)
+void MoveGenerator::king(MoveList& moves, const Position& position, const MoveGenInfo& info, MoveGenType type)
 {
     Square square = info.kingSquare;
+
     Color sideToMove = position.getSideToMove();
     Color enemy = (sideToMove == Color::WHITE) ? Color::BLACK : Color::WHITE;
 
@@ -208,9 +209,18 @@ void MoveGenerator::king(MoveList& moves, const Position& position, const MoveGe
     Bitboard possible = Attacks::getKingAttacks(info.kingSquare) & ~position.getOccupied(sideToMove);
     possible &= ~info.kingAttackers;
 
+    switch (type)
+    {
+        case MoveGenType::ALL: break;
+        case MoveGenType::TACTICAL: possible &= position.getOccupied(enemy); break;
+        case MoveGenType::QUIETS: possible &= ~occupied; break;
+    }
+
     addToList(moves, possible, square);
 
-    if (info.checkers != 0) return; // if the king is in check, don't care about castling cuz you can't
+    // if the king is in check, don't care about castling cuz you can't
+    // castling is also classified as a quiet move, so if the movegen wants tactical we can ignore castling
+    if (info.checkers != 0 || type == MoveGenType::TACTICAL) return;
 
     Square kingHome = (sideToMove == Color::WHITE) ? 4 : 60;
     Square rookKingSide = (sideToMove == Color::WHITE) ? 7 : 63;
@@ -263,6 +273,10 @@ void MoveGenerator::king(MoveList& moves, const Position& position, const MoveGe
     }
 }
 
+constexpr Bitboard RANK_2 = 0x000000000000FF00ULL;
+constexpr Bitboard RANK_2_TO_7 = 0x00FFFFFFFFFFFF00ULL;
+constexpr Bitboard RANK_7 = 0x00FF000000000000ULL;
+
 void checkEnPassant(MoveList& moves, const Position& position, const MoveGenInfo& info, Square from)
 {
     Color sideToMove = position.getSideToMove();
@@ -288,43 +302,115 @@ void checkEnPassant(MoveList& moves, const Position& position, const MoveGenInfo
     }
 }
 
-void MoveGenerator::pawn(MoveList& moves, const Position& position, const MoveGenInfo& info)
+// ugh this one is so complicated
+void MoveGenerator::pawn(MoveList& moves, const Position& position, const MoveGenInfo& info, MoveGenType type)
 {
     Color sideToMove = position.getSideToMove();
-    Color enemy = (sideToMove == Color::WHITE) ? Color::BLACK : Color::WHITE;
 
+    Bitboard enemy = position.getOccupied(sideToMove == Color::WHITE ? Color::BLACK : Color::WHITE);
     Bitboard occupied = position.getOccupied();
     Bitboard empty = ~occupied;
+
     Bitboard pawns = position.getBitboard(Pieces::makePiece(sideToMove, PieceType::PAWN));
+
+    // exclude pawns that can promote for now. we operate on those separately
+    Bitboard normalPawns = pawns & RANK_2_TO_7;
 
     int direction = (sideToMove == Color::WHITE) ? 8 : -8;
     int startingRank = (sideToMove == Color::WHITE) ? 1 : 6;
-    int promotionRank = (sideToMove == Color::WHITE) ? 7 : 0;
 
-    while (pawns)
+    while (normalPawns)
     {
         unsigned long target;
-        _BitScanForward64(&target, pawns);
+        _BitScanForward64(&target, normalPawns);
 
         Square square = static_cast<Square>(target);
 
-        Bitboard possible = 0;
-
-        int forward = square + direction;
-
-        if (forward >= 0 && forward < 64 && (empty & (1ULL << forward)))
+        // quiet moves
+        if (type != MoveGenType::TACTICAL)
         {
-            possible |= 1ULL << forward;
+            int forward = square + direction;
 
-            int forwardTwo = square + direction * 2;
-
-            if (square / 8 == startingRank && (empty & (1ULL << forwardTwo)))
+            if (forward >= 0 && forward < 64 && (empty & (1ULL << forward)))
             {
-                possible |= 1ULL << forwardTwo;
+                Bitboard possible = 1ULL << forward;
+
+                int forwardTwo = square + direction * 2;
+
+                // single push
+                possible &= RANK_2_TO_7;
+                possible &= info.evasionMask;
+                possible &= info.pinMasks[square];
+
+                if (possible)
+                {
+                    moves.append(MovePacker::encodeMove(square, forward));
+                }
+
+                // double push
+                if (square / 8 == startingRank && (empty & (1ULL << forwardTwo)))
+                {
+                    Bitboard doublePossible = 1ULL << forwardTwo;
+
+                    doublePossible &= RANK_2_TO_7;
+                    doublePossible &= info.evasionMask;
+                    doublePossible &= info.pinMasks[square];
+
+                    if (doublePossible)
+                    {
+                        moves.append(MovePacker::encodeMove(square, forwardTwo, MovePacker::Flag::DOUBLE_PAWN_PUSH));
+                    }
+                }
             }
         }
 
-        possible |= Attacks::getPawnAttacks(sideToMove, square) & position.getOccupied(enemy);
+        // tactical moves
+        if (type != MoveGenType::QUIETS)
+        {
+            Bitboard possible = Attacks::getPawnAttacks(sideToMove, square) & enemy;
+
+            possible &= RANK_2_TO_7;
+            possible &= info.evasionMask;
+            possible &= info.pinMasks[square];
+
+            addToList(moves, possible, square);
+
+            // en passant
+            checkEnPassant(moves, position, info, square);
+        }
+
+        normalPawns &= normalPawns - 1;
+    }
+
+    if (type == MoveGenType::QUIETS) return;
+
+    Bitboard promotionPawns = pawns & (sideToMove == Color::WHITE ? RANK_7 : RANK_2);
+
+    const MovePacker::Flag promotions[4] = {
+        MovePacker::Flag::KNIGHT,
+        MovePacker::Flag::BISHOP,
+        MovePacker::Flag::ROOK,
+        MovePacker::Flag::QUEEN
+    };
+
+    while (promotionPawns)
+    {
+        unsigned long target;
+        _BitScanForward64(&target, promotionPawns);
+
+        Square square = static_cast<Square>(target);
+
+        int forward = square + direction;
+
+        Bitboard possible = 0;
+
+        // quiet promotion
+        if (forward >= 0 && forward < 64 && (empty & (1ULL << forward)))
+        {
+            possible |= 1ULL << forward;
+        }
+        // capture promotion
+        possible |= Attacks::getPawnAttacks(sideToMove, square) & enemy;
 
         possible &= info.evasionMask;
         possible &= info.pinMasks[square];
@@ -334,43 +420,24 @@ void MoveGenerator::pawn(MoveList& moves, const Position& position, const MoveGe
             unsigned long destination;
             _BitScanForward64(&destination, possible);
 
-            Square end = static_cast<Square>(destination);
-
-            if (end / 8 == promotionRank)
+            for (auto promotion : promotions)
             {
-                const MovePacker::Flag promotions[4] = {
-                    MovePacker::Flag::KNIGHT,
-                    MovePacker::Flag::BISHOP,
-                    MovePacker::Flag::ROOK,
-                    MovePacker::Flag::QUEEN
-                };
-
-                for (auto promotion : promotions)
-                {
-                    moves.append(MovePacker::encodeMove(square, end, promotion));
-                }
-            }
-            else
-            {
-                MovePacker::Flag flag = (abs(end - square) == 16) ? MovePacker::Flag::DOUBLE_PAWN_PUSH : MovePacker::Flag::NONE;
-
-                moves.append(MovePacker::encodeMove(square, end, flag));
+                moves.append(MovePacker::encodeMove(square, static_cast<Square>(destination), promotion));
             }
 
             possible &= possible - 1;
         }
 
-        checkEnPassant(moves, position, info, square);
-
-        pawns &= pawns - 1;
+        promotionPawns &= promotionPawns - 1;
     }
 }
 
-void MoveGenerator::knight(MoveList& moves, const Position& position, const MoveGenInfo& info)
+void MoveGenerator::knight(MoveList& moves, const Position& position, const MoveGenInfo& info, MoveGenType type)
 {
     Color sideToMove = position.getSideToMove();
 
-    Bitboard occupied = position.getOccupied(sideToMove);
+    Bitboard friendly = position.getOccupied(sideToMove);
+    Bitboard enemy = position.getOccupied(sideToMove == Color::WHITE ? Color::BLACK : Color::WHITE);
     Bitboard knights = position.getBitboard(Pieces::makePiece(sideToMove, PieceType::KNIGHT));
 
     while (knights)
@@ -380,7 +447,15 @@ void MoveGenerator::knight(MoveList& moves, const Position& position, const Move
 
         Square square = static_cast<Square>(target);
 
-        Bitboard possible = Attacks::getKnightAttacks(square) & ~occupied;
+        Bitboard possible = Attacks::getKnightAttacks(square);
+
+        switch (type)
+        {
+            case MoveGenType::TACTICAL: possible &= enemy; break;
+            case MoveGenType::QUIETS: possible &= ~position.getOccupied(); break;
+            case MoveGenType::ALL: possible &= ~friendly; break;
+        }
+
         possible &= info.evasionMask;
         possible &= info.pinMasks[square];
 
@@ -390,11 +465,12 @@ void MoveGenerator::knight(MoveList& moves, const Position& position, const Move
     }
 }
 
-void MoveGenerator::bishop(MoveList& moves, const Position& position, const MoveGenInfo& info)
+void MoveGenerator::bishop(MoveList& moves, const Position& position, const MoveGenInfo& info, MoveGenType type)
 {
     Color sideToMove = position.getSideToMove();
 
-    Bitboard occupied = position.getOccupied();
+    Bitboard friendly = position.getOccupied(sideToMove);
+    Bitboard enemy = position.getOccupied(sideToMove == Color::WHITE ? Color::BLACK : Color::WHITE);
     Bitboard bishops = position.getBitboard(Pieces::makePiece(sideToMove, PieceType::BISHOP));
 
     while (bishops)
@@ -404,8 +480,15 @@ void MoveGenerator::bishop(MoveList& moves, const Position& position, const Move
 
         Square square = static_cast<Square>(target);
 
-        Bitboard possible = Attacks::getBishopAttacks(square, occupied);
-        possible &= ~position.getOccupied(sideToMove);
+        Bitboard possible = Attacks::getBishopAttacks(square, friendly | enemy);
+
+        switch (type)
+        {
+            case MoveGenType::TACTICAL: possible &= enemy; break;
+            case MoveGenType::QUIETS: possible &= ~position.getOccupied(); break;
+            case MoveGenType::ALL: possible &= ~friendly; break;
+        }
+
         possible &= info.evasionMask;
         possible &= info.pinMasks[square];
 
@@ -415,11 +498,12 @@ void MoveGenerator::bishop(MoveList& moves, const Position& position, const Move
     }
 }
 
-void MoveGenerator::rook(MoveList& moves, const Position& position, const MoveGenInfo& info)
+void MoveGenerator::rook(MoveList& moves, const Position& position, const MoveGenInfo& info, MoveGenType type)
 {
     Color sideToMove = position.getSideToMove();
 
-    Bitboard occupied = position.getOccupied();
+    Bitboard friendly = position.getOccupied(sideToMove);
+    Bitboard enemy = position.getOccupied(sideToMove == Color::WHITE ? Color::BLACK : Color::WHITE);
     Bitboard rooks = position.getBitboard(Pieces::makePiece(sideToMove, PieceType::ROOK));
 
     while (rooks)
@@ -429,8 +513,15 @@ void MoveGenerator::rook(MoveList& moves, const Position& position, const MoveGe
 
         Square square = static_cast<Square>(target);
 
-        Bitboard possible = Attacks::getRookAttacks(square, occupied);
-        possible &= ~position.getOccupied(sideToMove);
+        Bitboard possible = Attacks::getRookAttacks(square, friendly | enemy);
+
+        switch (type)
+        {
+            case MoveGenType::TACTICAL: possible &= enemy; break;
+            case MoveGenType::QUIETS: possible &= ~position.getOccupied(); break;
+            case MoveGenType::ALL: possible &= ~friendly; break;
+        }
+
         possible &= info.evasionMask;
         possible &= info.pinMasks[square];
 
@@ -440,11 +531,12 @@ void MoveGenerator::rook(MoveList& moves, const Position& position, const MoveGe
     }
 }
 
-void MoveGenerator::queen(MoveList& moves, const Position& position, const MoveGenInfo& info)
+void MoveGenerator::queen(MoveList& moves, const Position& position, const MoveGenInfo& info, MoveGenType type)
 {
     Color sideToMove = position.getSideToMove();
 
-    Bitboard occupied = position.getOccupied();
+    Bitboard friendly = position.getOccupied(sideToMove);
+    Bitboard enemy = position.getOccupied(sideToMove == Color::WHITE ? Color::BLACK : Color::WHITE);
     Bitboard queens = position.getBitboard(Pieces::makePiece(sideToMove, PieceType::QUEEN));
 
     while (queens)
@@ -454,8 +546,15 @@ void MoveGenerator::queen(MoveList& moves, const Position& position, const MoveG
 
         Square square = static_cast<Square>(target);
 
-        Bitboard possible = Attacks::getRookAttacks(square, occupied) | Attacks::getBishopAttacks(square, occupied);
-        possible &= ~position.getOccupied(sideToMove);
+        Bitboard possible = Attacks::getRookAttacks(square, friendly | enemy) | Attacks::getBishopAttacks(square, friendly | enemy);
+
+        switch (type)
+        {
+            case MoveGenType::TACTICAL: possible &= enemy; break;
+            case MoveGenType::QUIETS: possible &= ~position.getOccupied(); break;
+            case MoveGenType::ALL: possible &= ~friendly; break;
+        }
+
         possible &= info.evasionMask;
         possible &= info.pinMasks[square];
 
@@ -467,122 +566,20 @@ void MoveGenerator::queen(MoveList& moves, const Position& position, const MoveG
 
 // and then the generate everything function
 
-void MoveGenerator::generateLegalMoves(const Position& position, MoveGenInfo info, MoveList& moves)
+void MoveGenerator::generateLegalMoves(const Position& position, MoveGenInfo info, MoveList& moves, MoveGenType type)
 {
     moves.count = 0;
 
     if (info.checkerCount() >= 2)
     {
-        king(moves, position, info);
+        king(moves, position, info, type);
         return;
     }
 
-    king(moves, position, info);
-    pawn(moves, position, info);
-    knight(moves, position, info);
-    bishop(moves, position, info);
-    rook(moves, position, info);
-    queen(moves, position, info);
-}
-
-// Quiescence search is based on attacks to make the position quiet- so we can make it easier by only generating attacks
-void MoveGenerator::generateTacticalMoves(const Position& position, MoveGenInfo info, MoveList& moves)
-{
-    Color sideToMove = position.getSideToMove();
-    Bitboard possible;
-    Bitboard occupied = position.getOccupied();
-    Bitboard friendlyPieces = position.getOccupied(sideToMove);
-    Bitboard enemyPieces = position.getOccupied((sideToMove == Color::WHITE) ? Color::BLACK : Color::WHITE);
-
-    while (friendlyPieces)
-    {
-        unsigned long target;
-        _BitScanForward64(&target, friendlyPieces);
-
-        possible = 0;
-
-        switch(Pieces::getType(position.getPiece(target)))
-        {
-            case PieceType::KING:
-                possible |= Attacks::getKingAttacks(info.kingSquare) & enemyPieces & ~info.kingAttackers; break;
-            case PieceType::PAWN:
-            {
-                Bitboard captures = Attacks::getPawnAttacks(sideToMove, target) & enemyPieces & info.evasionMask & info.pinMasks[target];
-
-                int promotionRank = (sideToMove == Color::WHITE) ? 7 : 0;
-
-                while (captures)
-                {
-                    unsigned long destination;
-                    _BitScanForward64(&destination, captures);
-
-                    if (destination / 8 == promotionRank)
-                    {
-                        const MovePacker::Flag promotions[4] = {
-                            MovePacker::Flag::KNIGHT,
-                            MovePacker::Flag::BISHOP,
-                            MovePacker::Flag::ROOK,
-                            MovePacker::Flag::QUEEN
-                        };
-
-                        for (auto promotion : promotions)
-                        {
-                            moves.append(MovePacker::encodeMove(target, destination, promotion));
-                        }
-                    }
-                    else
-                    {
-                        moves.append(MovePacker::encodeMove(target, destination));
-                    }
-
-                    captures &= captures - 1;
-                }
-
-                int direction = (sideToMove == Color::WHITE) ? 8 : -8;
-                int destination = static_cast<int>(target) + direction;
-
-                if (destination >= 0 && destination < 64)
-                {
-                    int promotionRank = (sideToMove == Color::WHITE) ? 7 : 0;
-
-                    if (destination / 8 == promotionRank &&
-                        !(occupied & (1ULL << destination)) &&
-                        (info.evasionMask & (1ULL << destination)) &&
-                        (info.pinMasks[target] & (1ULL << destination)))
-                    {
-                        const MovePacker::Flag promotions[4] = {
-                            MovePacker::Flag::KNIGHT,
-                            MovePacker::Flag::BISHOP,
-                            MovePacker::Flag::ROOK,
-                            MovePacker::Flag::QUEEN
-                        };
-
-                        for (auto promotion : promotions)
-                        {
-                            moves.append(MovePacker::encodeMove(target, destination, promotion));
-                        }
-                    }
-                }
-
-                checkEnPassant(moves, position, info, target);
-
-                break;
-            }
-
-            case PieceType::KNIGHT:
-                possible |= Attacks::getKnightAttacks(target) & enemyPieces & info.evasionMask & info.pinMasks[target]; break;
-            case PieceType::BISHOP:
-                possible |= Attacks::getBishopAttacks(target, occupied) & enemyPieces & info.evasionMask & info.pinMasks[target]; break;
-            case PieceType::ROOK:
-                possible |= Attacks::getRookAttacks(target, occupied) & enemyPieces & info.evasionMask & info.pinMasks[target]; break;
-            case PieceType::QUEEN:
-                possible |= Attacks::getBishopAttacks(target, occupied) & enemyPieces & info.evasionMask & info.pinMasks[target];
-                possible |= Attacks::getRookAttacks(target, occupied) & enemyPieces & info.evasionMask & info.pinMasks[target];
-                break;
-        }
-
-        addToList(moves, possible, target);
-            
-        friendlyPieces &= friendlyPieces - 1;
-    }
+    king(moves, position, info, type);
+    pawn(moves, position, info, type);
+    knight(moves, position, info, type);
+    bishop(moves, position, info, type);
+    rook(moves, position, info, type);
+    queen(moves, position, info, type);
 }

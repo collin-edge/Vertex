@@ -3,12 +3,14 @@
 #include <atomic>
 #include <vector>
 
+#include "search_config.h"
 #include "evaluation/evaluation.h"
 #include "../position.h"
 #include "../moves.h"
 #include "move_ordering.h"
-#include "transposition_tables.h"
-#include "search_stack.h"
+#include "objects/transposition_tables.h"
+#include "objects/search_stack.h"
+#include "objects/search_heuristics.h"
 
 struct SearchLimits
 {
@@ -41,17 +43,13 @@ private:
     uint64_t nodes = 0;
     int currentDepth = 0;
 
-    static constexpr int MAX_PLY = 64;
-
-    SearchStack stack[MAX_PLY];
+    SearchStack stack[SearchConfig::MAX_PLY];
+    SearchHeuristics heuristics;
     TranspositionTable transposition{64};
-
-    int history[2][64][64] = {};
+    QuiescenceTranspositionTable quiescence_tt{8};
 
     int search(Position& position, int depth, int alpha, int beta, int ply = 0);
     int quiescence(Position& position, int alpha, int beta, int ply, int qply = 0);
-
-    void updateKillers(int ply, Move move);
 
 public:
     Move findBestMove(const Position& position, SearchLimits l);

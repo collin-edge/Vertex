@@ -75,3 +75,35 @@ int MoveOrdering::scoreMove(Move move, const Position& position, Move ttMove, co
     int col = (position.getSideToMove() == Color::WHITE) ? 0 : 1;
     return history[col][from][to];
 }
+
+int MoveOrdering::scoreTactical(Move move, const Position& position)
+{
+    // using MVV-LVA, a pawn capturing a queen is better than a queen capturing a pawn
+    // formula is victimScore * 10 - attackerScore
+
+    Square from = MovePacker::getStart(move);
+    Square to = MovePacker::getEnd(move);
+    auto flag = MovePacker::getFlag(move);
+
+    Piece attacker = position.getPiece(from);
+    Piece victim = position.getPiece(to);
+
+    int captureScore = 0;
+
+    if (flag == MovePacker::Flag::EN_PASSANT)
+    {
+        int capturedSquare = to + (position.getSideToMove() == Color::WHITE ? -8 : 8);
+        victim = position.getPiece(static_cast<Square>(capturedSquare));
+    }
+
+    if (victim != Pieces::EMPTY)
+    {
+        int attackerScore = pieceValue(Pieces::getType(attacker));
+        int victimScore = pieceValue(Pieces::getType(victim));
+
+        captureScore = victimScore * 10 - attackerScore;
+    }
+
+    if (MovePacker::isPromotion(flag)) return 90000 + captureScore;
+    return captureScore;
+}
