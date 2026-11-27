@@ -11,6 +11,7 @@
 #include "objects/transposition_tables.h"
 #include "objects/search_stack.h"
 #include "objects/search_heuristics.h"
+#include "opening_book/opening_book.h"
 
 struct SearchLimits
 {
@@ -48,10 +49,14 @@ private:
     TranspositionTable transposition{64};
     QuiescenceTranspositionTable quiescence_tt{8};
 
+    OpeningBook openingBook;
+
     int search(Position& position, int depth, int alpha, int beta, int ply = 0);
     int quiescence(Position& position, int alpha, int beta, int ply, int qply = 0);
 
 public:
+    Search();
+    
     Move findBestMove(const Position& position, SearchLimits l);
     bool DEBUG = true;
 

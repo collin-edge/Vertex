@@ -332,6 +332,27 @@ Move Search::findBestMove(const Position& position, SearchLimits l)
     limits = l;
     nodes = 0;
 
+    Move bookMove = NO_MOVE;
+
+    MoveGenInfo info = MoveGenerator::calculateInfo(copy);
+
+    if (openingBook.probe(position.getZobristKey(), bookMove))
+    {
+        MoveList legalMoves;
+        MoveGenerator::generateLegalMoves(copy, info, legalMoves, MoveGenType::ALL);
+
+        for (Move move : legalMoves)
+        {
+            if (move == bookMove)
+            {
+                if (DEBUG)
+                    std::cout << "info string Opening book Move\n";
+
+                return move;
+            }
+        }
+    }
+
     transposition.newSearch();
     quiescence_tt.newSearch();
     heuristics.clearKillers();
@@ -356,8 +377,6 @@ Move Search::findBestMove(const Position& position, SearchLimits l)
             break;
 
         SearchStack& root = stack[0];
-
-        MoveGenInfo info = MoveGenerator::calculateInfo(copy);
 
         root.resetMovePicker();
 
@@ -415,6 +434,14 @@ Move Search::findBestMove(const Position& position, SearchLimits l)
     }
 
     return bestMove;
+}
+
+Search::Search()
+{
+    if (!openingBook.open("opening_book.bin"))
+        std::cerr << "Failed to load opening book.\n";
+    else
+        std::cout << "Opening book loaded successfully.\n";
 }
 
 void Search::stop()

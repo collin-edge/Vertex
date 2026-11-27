@@ -302,7 +302,9 @@ UndoInfo Position::makeMove(Move m)
         remove(end);
         Piece promoPiece = Pieces::makePiece(sideToMove, MovePacker::promotedPiece(flag));
         add(promoPiece, end);
-    } else {
+    } 
+    else 
+    {
         switch (flag)
         {
             case MovePacker::Flag::DOUBLE_PAWN_PUSH:

@@ -15,20 +15,35 @@
                 "/I${workspaceFolder}\\include",
 
                 "/Fo${workspaceFolder}\\bin\\",
-                "/Fe${workspaceFolder}\\bin\\vertex-mk-alpha.exe",
 
+                "/Fe${workspaceFolder}\\bin\\vertex_beta.exe",
                 "${workspaceFolder}\\src\\main.cpp",
+
+                // enable these four and disable the two above compilation to recompile the opening book compiler
+                
+                //"/Fe${workspaceFolder}\\bin\\book_compiler.exe",
+                //"${workspaceFolder}\\src\\chess\\engine\\opening_book\\book_writer\\book_compiler.cpp",
+                //"${workspaceFolder}\\src\\chess\\engine\\opening_book\\book_writer\\polyglot_book.cpp",
+                //"${workspaceFolder}\\src\\chess\\engine\\opening_book\\book_writer\\polyglot.cpp",
+
                 "${workspaceFolder}\\src\\chess\\board.cpp",
                 "${workspaceFolder}\\src\\chess\\position.cpp",
+
+                "${workspaceFolder}\\src\\uci\\uci.cpp",
+
                 "${workspaceFolder}\\src\\chess\\move_generation\\attack_tables.cpp",
                 "${workspaceFolder}\\src\\chess\\move_generation\\attacks.cpp",
                 "${workspaceFolder}\\src\\chess\\move_generation\\movegen.cpp",
-                "${workspaceFolder}\\src\\uci\\uci.cpp",
+
                 "${workspaceFolder}\\src\\chess\\engine\\evaluation\\evaluation.cpp",
+
                 "${workspaceFolder}\\src\\chess\\engine\\search.cpp",
                 "${workspaceFolder}\\src\\chess\\engine\\move_ordering.cpp",
+
                 "${workspaceFolder}\\src\\chess\\engine\\objects\\search_stack.cpp",
                 "${workspaceFolder}\\src\\chess\\engine\\objects\\search_heuristics.cpp",
+
+                "${workspaceFolder}\\src\\chess\\engine\\opening_book\\opening_book.cpp",
 
                 "/link",
                 "/LIBPATH:${workspaceFolder}\\lib",

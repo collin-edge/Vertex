@@ -14,7 +14,7 @@ private:
     std::ifstream file;
     uint64_t entryCount = 0;
 
-    static constexpr uint64_t ENTRY_SIZE = 10;
+    static constexpr uint64_t ENTRY_SIZE = 12;
 
 public:
     bool open(const std::string& filename);
