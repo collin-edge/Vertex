@@ -42,4 +42,5 @@ namespace MoveGenerator
     void queen(MoveList& moves, const Position& position, const MoveGenInfo& info, MoveGenType type);
 
     void generateLegalMoves(const Position& position, MoveGenInfo info, MoveList& moves, MoveGenType type);
+    bool isLegal(const Position& position, MoveGenInfo info, Move move);
 };

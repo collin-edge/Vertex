@@ -3,14 +3,13 @@
 #include "../types.h"
 #include "../moves.h"
 #include "../position.h"
+#include "../move_generation/attacks.h"
 
 // Alpha-Beta pruning is a lot stronger whenever moves that are likely to be really good are the first ones searched, and more irrelevant moves are last
 namespace MoveOrdering
 {
-    void orderMoves(MoveList& moves, const Position& position, Move ttMove, const int history [2][64][64], const Move* killerMoves = nullptr);
-    int scoreMove(Move move, const Position& position, Move ttMove, const int history [2][64][64], const Move* killerMoves = nullptr);
-
     int scoreTactical(Move move, const Position& position);
+    int see(Move move, const Position& position);
 
     constexpr int pieceValue(PieceType piece)
     {
@@ -25,4 +24,6 @@ namespace MoveOrdering
             default: return 0;
         }
     }
+
+    int capturedPieceValue(Move move, const Position& position);
 }

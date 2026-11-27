@@ -30,7 +30,10 @@ private:
     bool quiescenceInitialized = false;
     int quiescenceMoveIndex = 0;
 
-    Move nextScoredMove();
+    MoveList goodTacticals;
+    MoveList badTacticals;
+
+    Move nextScoredMove(MoveList& list);
 
     // a list of the special moves like Transposition, Killer heuristic moves, that when we search other moves, we don't repeat it
     std::array<Move, 3> searchedMoves{};

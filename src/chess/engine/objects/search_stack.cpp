@@ -1,21 +1,21 @@
 #include "search_stack.h"
 
-Move SearchStack::nextScoredMove()
+Move SearchStack::nextScoredMove(MoveList& list)
 {
-    while (moveIndex < moves.count)
+    while (moveIndex < list.count)
     {
         int bestIndex = moveIndex;
 
-        for (int i = moveIndex + 1; i < moves.count; ++i)
+        for (int i = moveIndex + 1; i < list.count; ++i)
         {
             if (moveScores[i] > moveScores[bestIndex])
                 bestIndex = i;
         }
 
-        std::swap(moves[moveIndex], moves[bestIndex]);
+        std::swap(list[moveIndex], list[bestIndex]);
         std::swap(moveScores[moveIndex], moveScores[bestIndex]);
 
-        Move move = moves[moveIndex++];
+        Move move = list[moveIndex++];
 
         if (!alreadySearched(move))
         {
@@ -72,29 +72,10 @@ Move SearchStack::nextMove(const Position& position, const MoveGenInfo& info, Mo
             {
                 stage = MoveStage::GOOD_TACTICALS;
 
-                if (ttMove != NO_MOVE)
+                if (ttMove != NO_MOVE && MoveGenerator::isLegal(position, info, ttMove))
                 {
-                    MoveList legalMoves;
-                    legalMoves.count = 0;
-
-                    MoveGenerator::generateLegalMoves(position, info, legalMoves, MoveGenType::ALL);
-
-                    bool legal = false;
-
-                    for (int i = 0; i < legalMoves.count; ++i)
-                    {
-                        if (legalMoves[i] == ttMove)
-                        {
-                            legal = true;
-                            break;
-                        }
-                    }
-
-                    if (legal)
-                    {
-                        addSearchedMove(ttMove);
-                        return ttMove;
-                    }
+                    addSearchedMove(ttMove);
+                    return ttMove;
                 }
 
                 break;
@@ -108,15 +89,32 @@ Move SearchStack::nextMove(const Position& position, const MoveGenInfo& info, Mo
 
                     MoveGenerator::generateLegalMoves(position, info, moves, MoveGenType::TACTICAL);
 
-                    for (int i = 0; i < moves.count; ++i)
+                    goodTacticals.count = 0;
+                    badTacticals.count = 0;
+
+                    for (Move m : moves)
                     {
-                        moveScores[i] = MoveOrdering::scoreTactical(moves[i], position);
+                        if (MovePacker::isPromotion(MovePacker::getFlag(m)))
+                        {
+                            goodTacticals.append(m);
+                            continue;
+                        }
+
+                        if (MoveOrdering::see(m, position) >= 0)
+                            goodTacticals.append(m);
+                        else
+                            badTacticals.append(m);
+                    }
+
+                    for (int i = 0; i < goodTacticals.count; ++i)
+                    {
+                        moveScores[i] = MoveOrdering::scoreTactical(goodTacticals[i], position);
                     }
 
                     stageInitialized = true;
                 }
 
-                Move move = nextScoredMove();
+                Move move = nextScoredMove(goodTacticals);
 
                 if (move != NO_MOVE)
                     return move;
@@ -128,46 +126,27 @@ Move SearchStack::nextMove(const Position& position, const MoveGenInfo& info, Mo
             }
             case MoveStage::KILLERS:
             {
-                if (!stageInitialized)
-                {
-                    moves.count = 0;
-                    moveIndex = 0;
-
-                    MoveGenerator::generateLegalMoves(position, info, moves, MoveGenType::QUIETS);
-
-                    for (int i = 0; i < moves.count; ++i)
-                    {
-                        moveScores[i] = heuristics.getHistory(position.getSideToMove(), MovePacker::getStart(moves[i]), MovePacker::getEnd(moves[i]));
-                    }
-
-                    stageInitialized = true;
-                }
-
                 while (killerIndex < 2)
                 {
                     Move killer = heuristics.getKiller(ply, killerIndex++);
 
-                    bool legal = false;
+                    if (killer == NO_MOVE || alreadySearched(killer) || !MoveGenerator::isLegal(position, info, killer)) 
+                        continue;
 
-                    for (int i = 0; i < moves.count; ++i)
-                    {
-                        if (moves[i] == killer)
-                        {
-                            legal = true;
-                            break;
-                        }
-                    }
+                    Square end = MovePacker::getEnd(killer);
 
-                    if (legal && !alreadySearched(killer))
-                    {
-                        addSearchedMove(killer);
-                        return killer;
-                    }
+                    if (MovePacker::isPromotion(MovePacker::getFlag(killer))) continue;
+                    if (position.getPiece(end) != Pieces::EMPTY) continue;
+
+                    addSearchedMove(killer);
+                    return killer;
                 }
 
                 stage = MoveStage::QUIETS;
+                stageInitialized = false;
                 moveIndex = 0;
-                continue;
+
+                break;
             }
             case MoveStage::QUIETS:
             {
@@ -186,19 +165,39 @@ Move SearchStack::nextMove(const Position& position, const MoveGenInfo& info, Mo
                     stageInitialized = true;
                 }
 
-                Move move = nextScoredMove();
+                Move move = nextScoredMove(moves);
 
                 if (move != NO_MOVE)
                     return move;
 
                 stage = MoveStage::BAD_TACTICALS;
                 stageInitialized = false;
+                moveIndex = 0;
 
                 break;
             }
             case MoveStage::BAD_TACTICALS:
+            {
+                if (!stageInitialized)
+                {
+                    moveIndex = 0;
+
+                    for (int i = 0; i < badTacticals.count; ++i)
+                    {
+                        moveScores[i] = MoveOrdering::scoreTactical(badTacticals[i], position);
+                    }
+
+                    stageInitialized = true;
+                }
+
+                Move move = nextScoredMove(badTacticals);
+
+                if (move != NO_MOVE)
+                    return move;
+
                 stage = MoveStage::DONE;
                 break;
+            }
             case MoveStage::DONE:
                 return NO_MOVE;
         }
@@ -231,5 +230,5 @@ Move SearchStack::quiescenceNextMove(const Position& position, const MoveGenInfo
         quiescenceInitialized = true;
     }
 
-    return nextScoredMove();
+    return nextScoredMove(moves);
 }

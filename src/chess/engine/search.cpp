@@ -1,30 +1,45 @@
-#include "search.h"
-#include "../move_generation/movegen.h"
+#include <algorithm>
+#include <chrono>
+#include <cmath>
 #include <iostream>
 #include <utility>
-#include <chrono>
 
-constexpr int INF = 32000;
-constexpr int MATE_SCORE = 10000;
+#include "search.h"
+#include "../move_generation/movegen.h"
 
-int normalizeToTT(int score, int ply, int MAX_PLY)
+namespace
 {
-    if (score > MATE_SCORE - MAX_PLY)
-        score += ply;
-    else if (score < -MATE_SCORE + MAX_PLY)
-        score -= ply;
+    constexpr int INF = 32000;
+    constexpr int MATE_SCORE = 10000;
+    constexpr int MAX_QUIESCENCE_DEPTH = 8;
+    constexpr int ABSOLUTE_QUIESCENCE_DEPTH = 10;
 
-    return score;
-}
+    int normalizeToTT(int score, int ply, int MAX_PLY)
+    {
+        if (score > MATE_SCORE - MAX_PLY)
+            score += ply;
+        else if (score < -MATE_SCORE + MAX_PLY)
+            score -= ply;
 
-int normalizeFromTT(int score, int ply, int MAX_PLY)
-{
-    if (score > MATE_SCORE - MAX_PLY)
-        score -= ply;
-    else if (score < -MATE_SCORE + MAX_PLY)
-        score += ply;
+        return score;
+    }
 
-    return score;
+    int normalizeFromTT(int score, int ply, int MAX_PLY)
+    {
+        if (score > MATE_SCORE - MAX_PLY)
+            score -= ply;
+        else if (score < -MATE_SCORE + MAX_PLY)
+            score += ply;
+
+        return score;
+    }
+
+    int calculateReduction(int depth, int moveCount)
+    {
+        int reduction = static_cast<int>(0.75 + (std::log(depth) * std::log(moveCount)) / 2.25);
+
+        return std::clamp(reduction, 1, depth - 1);
+    }
 }
 
 int Search::search(Position& position, int depth, int alpha, int beta, int ply)
@@ -82,6 +97,10 @@ int Search::search(Position& position, int depth, int alpha, int beta, int ply)
     Move quietMovesSearched[MoveList::MAX_MOVES];
     int quietMoveCount = 0;
 
+    int moveCount = 0;
+
+    bool firstMove = true;
+
     while (true)
     {
         Move m = ss.nextMove(position, info, ttMove, heuristics, ply);
@@ -91,9 +110,55 @@ int Search::search(Position& position, int depth, int alpha, int beta, int ply)
 
         foundMove = true;
 
+        ++moveCount;
+
+        Square end = MovePacker::getEnd(m);
+        auto flag = MovePacker::getFlag(m);
+        Piece captured = position.getPiece(end);
+        bool quiet = (captured == Pieces::EMPTY && flag != MovePacker::Flag::EN_PASSANT && !MovePacker::isPromotion(flag));
+
         UndoInfo undo = position.makeMove(m);
 
-        int score = -search(position, depth - 1, -beta, -alpha, ply + 1);
+        // late move reduction implementation
+        int newDepth = depth - 1;
+        int score;
+
+        bool canReduce = moveCount >= 4 && depth >= 3 && quiet && info.checkerCount() == 0;
+
+        if (firstMove)
+        {
+            // first move search with the full window
+            score = -search(position, newDepth, -beta, -alpha, ply + 1);
+
+            firstMove = false;
+        }
+        else
+        {
+            // everything else we search with a smaller window to see if it could really best the first alpha
+            if (canReduce)
+            {
+                int reduction = calculateReduction(depth, moveCount);
+                int reducedDepth = std::max(0, newDepth - reduction);
+
+                score = -search(position, reducedDepth, -alpha - 1, -alpha, ply + 1);
+
+                // verify at full depth if it looks promising
+                if (score > alpha)
+                {
+                    score = -search(position, newDepth, -alpha - 1, -alpha, ply + 1);
+                }
+            }
+            else
+            {
+                score = -search(position, newDepth, -alpha - 1, -alpha, ply + 1);
+            }
+
+            // if it beats alpha but doesn't cause a cutoff, determine its actual score using a full window
+            if (score > alpha && score < beta)
+            {
+                score = -search(position, newDepth, -beta, -alpha,ply + 1);
+            }
+        }
 
         position.undoMove(undo);
 
@@ -109,13 +174,7 @@ int Search::search(Position& position, int depth, int alpha, int beta, int ply)
         if (score > alpha)
             alpha = score;
 
-        Square end = MovePacker::getEnd(m);
         Square start = MovePacker::getStart(m);
-        auto flag = MovePacker::getFlag(m);
-
-        Piece captured = position.getPiece(end);
-
-        bool quiet = captured == Pieces::EMPTY && flag != MovePacker::Flag::EN_PASSANT && !MovePacker::isPromotion(flag);
 
         if (alpha >= beta)
         {
@@ -179,9 +238,6 @@ int Search::search(Position& position, int depth, int alpha, int beta, int ply)
     return bestScore;
 }
 
-constexpr int MAX_QUIESCENCE_DEPTH = 8;
-constexpr int ABSOLUTE_QUIESCENCE_DEPTH = 10;
-
 int Search::quiescence(Position& position, int alpha, int beta, int ply, int qply)
 {
     if (stopSearch.load(std::memory_order_relaxed))
@@ -243,10 +299,11 @@ int Search::quiescence(Position& position, int alpha, int beta, int ply, int qpl
     }
 
     int bestScore = -INF;
+    int standPat = -INF;
 
     if (!inCheck)
     {
-        int standPat = Evaluation::evaluate(position, info);
+        standPat = Evaluation::evaluate(position, info);
 
         if (standPat >= beta)
         {
@@ -283,6 +340,18 @@ int Search::quiescence(Position& position, int alpha, int beta, int ply, int qpl
             break;
 
         foundMove = true;
+
+        auto flag = MovePacker::getFlag(m);
+        bool promotion = MovePacker::isPromotion(flag);
+        int capturedValue = MoveOrdering::capturedPieceValue(m, position);
+
+        constexpr int DELTA_MARGIN = 200;
+
+        if (!inCheck && !promotion && capturedValue > 0)
+        {
+            if (standPat + capturedValue + DELTA_MARGIN < alpha)
+                continue;
+        }
 
         UndoInfo undo = position.makeMove(m);
 
@@ -338,18 +407,12 @@ Move Search::findBestMove(const Position& position, SearchLimits l)
 
     if (openingBook.probe(position.getZobristKey(), bookMove))
     {
-        MoveList legalMoves;
-        MoveGenerator::generateLegalMoves(copy, info, legalMoves, MoveGenType::ALL);
-
-        for (Move move : legalMoves)
+        if (MoveGenerator::isLegal(position, info, bookMove))
         {
-            if (move == bookMove)
-            {
-                if (DEBUG)
-                    std::cout << "info string Opening book Move\n";
+            if (DEBUG)
+                std::cout << "info string Opening book Move\n";
 
-                return move;
-            }
+            return bookMove;
         }
     }
 
@@ -369,6 +432,9 @@ Move Search::findBestMove(const Position& position, SearchLimits l)
 
     int maxDepth = limits.depth > 0 ? limits.depth : 64;
 
+    int previousScore = 0;
+    int aspirationWindow = 25;
+
     for (int depth = 1; depth <= maxDepth; ++depth)
     {
         auto iterationStart = std::chrono::steady_clock::now();
@@ -376,47 +442,101 @@ Move Search::findBestMove(const Position& position, SearchLimits l)
         if (stopSearch.load(std::memory_order_relaxed))
             break;
 
-        SearchStack& root = stack[0];
-
-        root.resetMovePicker();
-
-        int bestScore = -INF;
         int alpha = -INF;
+        int beta = INF;
+
+        if (depth >= 2)
+        {
+            alpha = previousScore - aspirationWindow;
+            beta = previousScore + aspirationWindow;
+        }
 
         Move iterationBestMove = NO_MOVE;
+        int bestScore = -INF;
 
         while (true)
         {
-            Move m = root.nextMove(copy, info, ttMove, heuristics, 0);
+            SearchStack& root = stack[0];
+            root.resetMovePicker();
 
-            if (m == NO_MOVE)
-                break;
+            bestScore = -INF;
+            iterationBestMove = NO_MOVE;
 
-            UndoInfo undo = copy.makeMove(m);
+            int currentAlpha = alpha;
 
-            int score = -search(copy, depth - 1, -INF, -alpha, 1);
+            bool firstMove = true;
 
-            copy.undoMove(undo);
+            while (true)
+            {
+                Move m = root.nextMove(copy, info, ttMove, heuristics, 0);
+
+                if (m == NO_MOVE)
+                    break;
+
+                UndoInfo undo = copy.makeMove(m);
+
+                int score;
+
+                if (firstMove)
+                {
+                    score = -search(copy, depth - 1, -beta, -currentAlpha, 1);
+
+                    firstMove = false;
+                }
+                else
+                {
+                    score = -search(copy, depth - 1, -currentAlpha - 1, -currentAlpha, 1);
+
+                    if (score > currentAlpha && score < beta)
+                    {
+                        score = -search(copy, depth - 1, -beta, -currentAlpha, 1);
+                    }
+                }
+
+                copy.undoMove(undo);
+
+                if (stopSearch.load(std::memory_order_relaxed))
+                    break;
+
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    iterationBestMove = m;
+                }
+
+                if (score > currentAlpha)
+                    currentAlpha = score;
+            }
+
 
             if (stopSearch.load(std::memory_order_relaxed))
                 break;
 
-            if (score > bestScore)
+            if (bestScore <= alpha)
             {
-                bestScore = score;
-                iterationBestMove = m;
+                alpha -= aspirationWindow;
+                aspirationWindow *= 2;
+                continue;
             }
 
-            if (score > alpha)
-                alpha = score;
+            if (bestScore >= beta)
+            {
+                beta += aspirationWindow;
+                aspirationWindow *= 2;
+                continue;
+            }
+
+            break;
         }
 
         if (stopSearch.load(std::memory_order_relaxed))
             break;
 
         bestMove = iterationBestMove;
-
         ttMove = bestMove;
+        previousScore = bestScore;
+
+        aspirationWindow = 25;
 
         auto iterationEnd = std::chrono::steady_clock::now();
 

@@ -583,3 +583,216 @@ void MoveGenerator::generateLegalMoves(const Position& position, MoveGenInfo inf
     rook(moves, position, info, type);
     queen(moves, position, info, type);
 }
+
+// this function is really big
+bool MoveGenerator::isLegal(const Position& position, MoveGenInfo info, Move move)
+{
+    Color sideToMove = position.getSideToMove();
+    Color enemy = sideToMove == Color::WHITE ? Color::BLACK : Color::WHITE;
+
+    Square start = MovePacker::getStart(move);
+    Square end = MovePacker::getEnd(move);
+
+    auto flag = MovePacker::getFlag(move);
+
+    if (start >= 64 || end >= 64 || start == end)
+        return false;
+
+    Piece movingPiece = position.getPiece(start);
+    Piece targetPiece = position.getPiece(end);
+
+    if (movingPiece == Pieces::EMPTY) return false;
+    if (Pieces::getColor(movingPiece) != sideToMove) return false;
+    if (targetPiece != Pieces::EMPTY && Pieces::getColor(targetPiece) == sideToMove) return false;
+    if (targetPiece != Pieces::EMPTY && Pieces::getType(targetPiece) == PieceType::KING) return false;
+
+    PieceType pieceType = Pieces::getType(movingPiece);
+
+    Bitboard destination = 1ULL << end;
+    Bitboard occupied = position.getOccupied();
+
+    if (flag == MovePacker::Flag::EN_PASSANT)
+    {
+        if (pieceType != PieceType::PAWN)
+            return false;
+
+        Square epSquare = position.getEnPassant();
+
+        if (epSquare == NO_SQUARE) return false;
+        if (abs(static_cast<int>(start % 8) - static_cast<int>(epSquare % 8)) != 1) return false;
+        if (start / 8 != epSquare / 8) return false;
+
+        Square expectedTarget = static_cast<Square>(epSquare + (sideToMove == Color::WHITE ? 8 : -8));
+
+        if (end != expectedTarget) return false;
+
+        if (position.getPiece(end) != Pieces::EMPTY) return false;
+        if (position.getPiece(epSquare) != Pieces::makePiece(enemy, PieceType::PAWN)) return false;
+
+        Bitboard newOccupancy = occupied;
+
+        newOccupancy &= ~(1ULL << start);
+        newOccupancy &= ~(1ULL << epSquare);
+        newOccupancy |= (1ULL << end);
+
+        return !Attacks::isSquareAttacked( position, info.kingSquare, enemy, newOccupancy);
+    }
+
+    if (flag == MovePacker::Flag::CASTLE_KINGSIDE || flag == MovePacker::Flag::CASTLE_QUEENSIDE)
+    {
+        if (pieceType != PieceType::KING)
+            return false;
+
+        if (info.checkerCount() > 0)
+            return false;
+
+        Square kingHome = sideToMove == Color::WHITE ? 4 : 60;
+
+        if (start != kingHome)
+            return false;
+
+        bool kingSide = flag == MovePacker::Flag::CASTLE_KINGSIDE;
+
+        Square expectedEnd = static_cast<Square>(kingHome + (kingSide ? 2 : -2));
+
+        if (end != expectedEnd)
+            return false;
+
+        uint8_t right;
+
+        if (sideToMove == Color::WHITE)
+        {
+            right = kingSide ? WHITE_KINGSIDE : WHITE_QUEENSIDE;
+        }
+        else
+        {
+            right = kingSide ? BLACK_KINGSIDE : BLACK_QUEENSIDE;
+        }
+
+        if (!position.canCastle(right))
+            return false;
+
+        Square rookSquare;
+
+        Bitboard emptySquares;
+        Square transitSquare;
+        Square destinationSquare;
+
+        if (kingSide)
+        {
+            rookSquare = static_cast<Square>(kingHome + 3);
+
+            emptySquares = (1ULL << (kingHome + 1)) | (1ULL << (kingHome + 2));
+
+            transitSquare = static_cast<Square>(kingHome + 1);
+            destinationSquare = static_cast<Square>(kingHome + 2);
+        }
+        else
+        {
+            rookSquare = static_cast<Square>(kingHome - 4);
+
+            emptySquares = (1ULL << (kingHome - 1)) | (1ULL << (kingHome - 2)) | (1ULL << (kingHome - 3));
+
+            transitSquare = static_cast<Square>(kingHome - 1);
+            destinationSquare = static_cast<Square>(kingHome - 2);
+        }
+
+        if (occupied & emptySquares) return false;
+        if (position.getPiece(rookSquare) != Pieces::makePiece(sideToMove, PieceType::ROOK)) return false;
+
+        // king can't cross or land on an attacked square.
+        if (Attacks::isSquareAttacked(position, transitSquare, enemy, occupied)) return false;
+        if (Attacks::isSquareAttacked(position, destinationSquare, enemy, occupied)) return false;
+
+        return true;
+    }
+
+    if (flag == MovePacker::Flag::DOUBLE_PAWN_PUSH && pieceType != PieceType::PAWN)
+        return false;
+
+    if (MovePacker::isPromotion(flag) && pieceType != PieceType::PAWN)
+        return false;
+
+    if (pieceType == PieceType::PAWN)
+    {
+        int direction = sideToMove == Color::WHITE ? 8 : -8;
+        int startingRank = sideToMove == Color::WHITE ? 1 : 6;
+        int promotionRank = sideToMove == Color::WHITE ? 7 : 0;
+
+        int delta = static_cast<int>(end) - static_cast<int>(start);
+
+        int fileDifference = abs(static_cast<int>(end % 8) - static_cast<int>(start % 8));
+
+        bool capture = targetPiece != Pieces::EMPTY;
+        bool promotion = MovePacker::isPromotion(flag);
+
+        if (promotion)
+        {
+            if (flag != MovePacker::Flag::KNIGHT &&
+                flag != MovePacker::Flag::BISHOP &&
+                flag != MovePacker::Flag::ROOK &&
+                flag != MovePacker::Flag::QUEEN)
+                return false;
+
+            if (end / 8 != promotionRank)
+                return false;
+        }
+        else if (end / 8 == promotionRank)
+        {
+            return false;
+        }
+
+        if (flag == MovePacker::Flag::DOUBLE_PAWN_PUSH)
+        {
+            if (promotion) return false;
+            if (start / 8 != startingRank) return false;
+            if (delta != direction * 2) return false;
+
+            Square middle = static_cast<Square>(static_cast<int>(start) + direction);
+
+            if (position.getPiece(middle) != Pieces::EMPTY || targetPiece != Pieces::EMPTY) return false;
+        }
+        else if (capture)
+        {
+            if (fileDifference != 1) return false;
+            if (delta != direction - 1 && delta != direction + 1) return false;
+        }
+        else
+        {
+            if (fileDifference != 0) return false;
+            if (delta != direction) return false;
+            if (targetPiece != Pieces::EMPTY) return false;
+        }
+    }
+    else
+    {
+        Bitboard possible = 0;
+
+        switch (pieceType)
+        {
+            case PieceType::KNIGHT: possible = Attacks::getKnightAttacks(start); break;
+            case PieceType::BISHOP: possible = Attacks::getBishopAttacks(start, occupied); break;
+            case PieceType::ROOK: possible = Attacks::getRookAttacks(start, occupied); break;
+            case PieceType::QUEEN: possible = Attacks::getRookAttacks(start, occupied) | Attacks::getBishopAttacks(start, occupied); break;
+            case PieceType::KING:
+                possible = Attacks::getKingAttacks(start);
+                if (info.kingAttackers & destination) return false;
+                break;
+            default:
+                return false;
+        }
+
+        if (!(possible & destination))
+            return false;
+    }
+
+    // en passant / pin validation
+
+    if (pieceType != PieceType::KING)
+    {
+        if (!(info.evasionMask & destination)) return false;
+        if (!(info.pinMasks[start] & destination)) return false;
+    }
+
+    return true;
+}

@@ -33,6 +33,8 @@ struct SearchLimits
     bool infinite = false;
     bool ponder = false;
 
+    int threads = 1;
+
     std::vector<Move> searchMoves;
 };
 
@@ -56,9 +58,9 @@ private:
 
 public:
     Search();
-    
-    Move findBestMove(const Position& position, SearchLimits l);
-    bool DEBUG = true;
 
+    Move findBestMove(const Position& position, SearchLimits l);
     void stop();
+
+    bool DEBUG = true;
 };

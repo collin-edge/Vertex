@@ -1,80 +1,4 @@
 #include "move_ordering.h"
-#include <algorithm>
-
-void MoveOrdering::orderMoves(MoveList& moves, const Position& position, Move ttMove, const int history [2][64][64], const Move* killerMoves)
-{
-    std::array<int, MoveList::MAX_MOVES> scores{};
-
-    for (int i = 0; i < moves.count; ++i)
-    {
-        scores[i] = scoreMove(moves[i], position, ttMove, history, killerMoves);
-    }
-
-    for (int i = 0; i < moves.count - 1; ++i)
-    {
-        int best = i;
-
-        for (int j = i + 1; j < moves.count; ++j)
-        {
-            if (scores[j] > scores[best]) best = j;
-        }
-
-        std::swap(moves[i], moves[best]);
-        std::swap(scores[i], scores[best]);
-    }
-}
-
-int MoveOrdering::scoreMove(Move move, const Position& position, Move ttMove, const int history [2][64][64], const Move* killerMoves)
-{
-    // these two take priority over all
-    constexpr int TT_MOVE_SCORE = 1000000;
-    constexpr int PROMOTION_SCORE = 900000;
-    constexpr int KILLER_1_SCORE = 700000;
-    constexpr int KILLER_2_SCORE = 600000;
-
-    if (move == ttMove) return TT_MOVE_SCORE;
-
-    auto flag = MovePacker::getFlag(move);
-
-    // ok if it's not those then we do it as normal
-    // using MVV-LVA, a pawn capturing a queen is better than a queen capturing a pawn
-    // formula is victimScore * 10 - attackerScore
-
-    Square from = MovePacker::getStart(move);
-    Square to = MovePacker::getEnd(move);
-
-    Piece attacker = position.getPiece(from);
-    Piece victim = position.getPiece(to);
-
-    int captureScore = 0;
-
-    if (flag == MovePacker::Flag::EN_PASSANT)
-    {
-        int capturedSquare = to + (position.getSideToMove() == Color::WHITE ? -8 : 8);
-        victim = position.getPiece(static_cast<Square>(capturedSquare));
-    }
-
-    if (victim != Pieces::EMPTY)
-    {
-        int attackerScore = pieceValue(Pieces::getType(attacker));
-        int victimScore = pieceValue(Pieces::getType(victim));
-
-        captureScore = victimScore * 10 - attackerScore;
-    }
-
-    if (MovePacker::isPromotion(flag)) return PROMOTION_SCORE + captureScore;
-
-    if (killerMoves != nullptr)
-    {
-        if (move == killerMoves[0]) return KILLER_1_SCORE;
-        if (move == killerMoves[1]) return KILLER_2_SCORE;
-    }
-
-    if (victim != Pieces::EMPTY) return captureScore;
-
-    int col = (position.getSideToMove() == Color::WHITE) ? 0 : 1;
-    return history[col][from][to];
-}
 
 int MoveOrdering::scoreTactical(Move move, const Position& position)
 {
@@ -106,4 +30,126 @@ int MoveOrdering::scoreTactical(Move move, const Position& position)
 
     if (MovePacker::isPromotion(flag)) return 90000 + captureScore;
     return captureScore;
+}
+
+int MoveOrdering::see(Move move, const Position& position)
+{
+    Square from = MovePacker::getStart(move);
+    Square to = MovePacker::getEnd(move);
+
+    Piece attacker = position.getPiece(from);
+    Piece victim = position.getPiece(to);
+
+    Color side = position.getSideToMove();
+
+    auto flag = MovePacker::getFlag(move);
+
+    Bitboard occupied = position.getOccupied();
+
+    if (flag == MovePacker::Flag::EN_PASSANT)
+    {
+        Square capturedSquare = static_cast<Square>(to + (side == Color::WHITE ? -8 : 8));
+
+        victim = position.getPiece(capturedSquare);
+        occupied &= ~(1ULL << capturedSquare);
+    }
+
+    occupied &= ~(1ULL << from);
+    occupied |= (1ULL << to);
+
+    int gain[32]{};
+    int depth = 0;
+
+    gain[0] = pieceValue(Pieces::getType(victim));
+
+    if (MovePacker::isPromotion(flag))
+    {
+        PieceType promotionType;
+
+        switch (flag)
+        {
+            case MovePacker::Flag::KNIGHT: promotionType = PieceType::KNIGHT; break;
+            case MovePacker::Flag::BISHOP: promotionType = PieceType::BISHOP; break;
+            case MovePacker::Flag::ROOK: promotionType = PieceType::ROOK; break;
+            default: promotionType = PieceType::QUEEN; break;
+        }
+
+        gain[0] += pieceValue(promotionType) - pieceValue(PieceType::PAWN);
+    }
+
+    PieceType currentVictim = Pieces::getType(attacker);
+
+    Color sideToMove = (side == Color::WHITE) ? Color::BLACK : Color::WHITE;
+
+    while (depth < 30)
+    {
+        Bitboard attackers = Attacks::getAttackers(position, to, sideToMove, occupied);
+
+        attackers &= occupied;
+
+        if (!attackers)
+            break;
+
+        Square attackerSquare = NO_SQUARE;
+        PieceType attackerType = PieceType::KING;
+
+        for (int type = 0; type < 6; ++type)
+        {
+            PieceType pieceType = static_cast<PieceType>(type);
+
+            Bitboard candidates = attackers & position.getBitboard(Pieces::makePiece(sideToMove, pieceType)) & occupied;
+
+            if (candidates)
+            {
+                unsigned long square;
+                _BitScanForward64(&square, candidates);
+
+                attackerSquare = static_cast<Square>(square);
+                attackerType = pieceType;
+                break;
+            }
+        }
+
+        if (attackerSquare == NO_SQUARE)
+            break;
+
+        ++depth;
+
+        gain[depth] = pieceValue(currentVictim) - gain[depth - 1];
+
+        currentVictim = attackerType;
+
+        occupied &= ~(1ULL << attackerSquare);
+
+        sideToMove = (sideToMove == Color::WHITE) ? Color::BLACK : Color::WHITE;
+    }
+
+    while (depth > 0)
+    {
+        gain[depth - 1] = -std::max(-gain[depth - 1], gain[depth]);
+        --depth;
+    }
+
+    return gain[0];
+}
+
+int MoveOrdering::capturedPieceValue(Move move, const Position& position)
+{
+    Square to = MovePacker::getEnd(move);
+
+    auto flag = MovePacker::getFlag(move);
+
+    if (flag == MovePacker::Flag::EN_PASSANT)
+    {
+        Square capturedSquare = static_cast<Square>(to + (position.getSideToMove() == Color::WHITE ? -8 : 8));
+
+        return pieceValue(Pieces::getType(position.getPiece(capturedSquare)));
+    }
+
+    Piece victim = position.getPiece(to);
+
+    if (victim == Pieces::EMPTY)
+        return 0;
+
+    return pieceValue(Pieces::getType(victim));
 }
