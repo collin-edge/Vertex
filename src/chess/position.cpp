@@ -117,6 +117,14 @@ bool Position::constructPosition(std::string_view fen)
 
     board.reset();
 
+    zobristKey = 0;
+    castlingRights = 0;
+    enPassant = NO_SQUARE;
+    halfmoveClock = 0;
+    fullmoveNumber = 1;
+
+    sideToMove = Color::WHITE;
+
     std::string_view pieces = next_field(fen);
     std::string_view side = next_field(fen);
     std::string_view castling = next_field(fen);
@@ -251,6 +259,14 @@ bool Position::constructPosition(std::string_view fen)
     if (halfmoveClock < 0 || fullmoveNumber < 1)
         return false;
 
+    if (sideToMove == Color::BLACK)
+        zobristKey ^= Zobrist::SIDE_TO_MOVE;
+
+    zobristKey ^= Zobrist::CASTLING_RIGHTS[castlingRights];
+
+    if (enPassant != NO_SQUARE)
+        zobristKey ^= Zobrist::EN_PASSANT_FILE[enPassant % 8];
+
     return true;
 }
 
@@ -323,6 +339,10 @@ UndoInfo Position::makeMove(Move m)
         ++halfmoveClock;
 
     updateCastlingRights(start, end, movingPiece, captured);
+
+    if (sideToMove == Color::BLACK)
+        ++fullmoveNumber;
+
     switchTurn();
 
     return undo;

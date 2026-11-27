@@ -117,10 +117,10 @@ namespace PST
         return (t * t * (768 - 2 * t)) / (256 * 256);
     }
 
-    int pstScore(Square square, PieceType piece, const Position& position, int endgameWeight)
+    int pstScore(Square square, PieceType piece, Color color, int endgameWeight)
     {
         // mirror the tables for black
-        if (position.getSideToMove() == Color::BLACK)
+        if (color == Color::BLACK)
             square ^= 56;
 
         switch (piece)

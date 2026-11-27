@@ -128,11 +128,37 @@ Move SearchStack::nextMove(const Position& position, const MoveGenInfo& info, Mo
             }
             case MoveStage::KILLERS:
             {
+                if (!stageInitialized)
+                {
+                    moves.count = 0;
+                    moveIndex = 0;
+
+                    MoveGenerator::generateLegalMoves(position, info, moves, MoveGenType::QUIETS);
+
+                    for (int i = 0; i < moves.count; ++i)
+                    {
+                        moveScores[i] = heuristics.getHistory(position.getSideToMove(), MovePacker::getStart(moves[i]), MovePacker::getEnd(moves[i]));
+                    }
+
+                    stageInitialized = true;
+                }
+
                 while (killerIndex < 2)
                 {
                     Move killer = heuristics.getKiller(ply, killerIndex++);
 
-                    if (killer != NO_MOVE && !alreadySearched(killer))
+                    bool legal = false;
+
+                    for (int i = 0; i < moves.count; ++i)
+                    {
+                        if (moves[i] == killer)
+                        {
+                            legal = true;
+                            break;
+                        }
+                    }
+
+                    if (legal && !alreadySearched(killer))
                     {
                         addSearchedMove(killer);
                         return killer;
@@ -140,7 +166,8 @@ Move SearchStack::nextMove(const Position& position, const MoveGenInfo& info, Mo
                 }
 
                 stage = MoveStage::QUIETS;
-                break;
+                moveIndex = 0;
+                continue;
             }
             case MoveStage::QUIETS:
             {

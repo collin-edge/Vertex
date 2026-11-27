@@ -7,8 +7,6 @@
 constexpr int INF = 32000;
 constexpr int MATE_SCORE = 10000;
 
-constexpr int MAX_QUIESCENCE_DEPTH = 8;
-
 int normalizeToTT(int score, int ply, int MAX_PLY)
 {
     if (score > MATE_SCORE - MAX_PLY)
@@ -59,7 +57,14 @@ int Search::search(Position& position, int depth, int alpha, int beta, int ply)
     }
 
     if (ply >= SearchConfig::MAX_PLY - 1)
-        return Evaluation::evaluate(position);
+    {
+        MoveGenInfo info = MoveGenerator::calculateInfo(position);
+
+        if (info.checkerCount() > 0)
+            return 0;
+
+        return Evaluation::evaluate(position, info);
+    }
 
     if (depth <= 0)
         return quiescence(position, alpha, beta, ply);
@@ -174,6 +179,9 @@ int Search::search(Position& position, int depth, int alpha, int beta, int ply)
     return bestScore;
 }
 
+constexpr int MAX_QUIESCENCE_DEPTH = 8;
+constexpr int ABSOLUTE_QUIESCENCE_DEPTH = 10;
+
 int Search::quiescence(Position& position, int alpha, int beta, int ply, int qply)
 {
     if (stopSearch.load(std::memory_order_relaxed))
@@ -185,32 +193,52 @@ int Search::quiescence(Position& position, int alpha, int beta, int ply, int qpl
         return Evaluation::evaluate(position);
 
     int originalAlpha = alpha;
-
     uint64_t key = position.getZobristKey();
 
     MoveGenInfo info = MoveGenerator::calculateInfo(position);
-    bool inCheck = (info.checkerCount() > 0);
+    bool inCheck = info.checkerCount() > 0;
 
     int remainingDepth = std::max(0, MAX_QUIESCENCE_DEPTH - qply);
-
     QTTMode mode = inCheck ? QTTMode::IN_CHECK : QTTMode::NORMAL;
 
-    bool cacheable = qply < MAX_QUIESCENCE_DEPTH;
+    if (qply >= ABSOLUTE_QUIESCENCE_DEPTH)
+    {
+        MoveList moves;
+        moves.count = 0;
+
+        MoveGenerator::generateLegalMoves(position, info, moves, MoveGenType::ALL);
+
+        if (moves.count == 0)
+        {
+            if (inCheck)
+                return -MATE_SCORE + ply;
+
+            return 0;
+        }
+
+        return Evaluation::evaluate(position, info);
+    }
 
     QTTEntry ttEntry;
 
-    if (cacheable && quiescence_tt.probe(key, mode, ttEntry))
+    if (quiescence_tt.probe(key, mode, ttEntry))
     {
         if (ttEntry.depth >= remainingDepth)
         {
-            int ttScore = normalizeFromTT(ttEntry.score, ply, SearchConfig::MAX_PLY);
+            int ttScore = normalizeFromTT(
+                ttEntry.score,
+                ply,
+                SearchConfig::MAX_PLY
+            );
 
             if (ttEntry.bound == TTBound::EXACT)
                 return ttScore;
-            if (ttEntry.bound == TTBound::LOWER_BOUND && ttScore >= beta)
-                return ttScore;
-            if (ttEntry.bound == TTBound::UPPER_BOUND && ttScore <= alpha)
-                return ttScore;
+
+            if (ttEntry.bound == TTBound::LOWER_BOUND)
+                if (ttScore >= beta) return ttScore;
+
+            if (ttEntry.bound == TTBound::UPPER_BOUND)
+                if (ttScore <= alpha) return ttScore;
         }
     }
 
@@ -218,22 +246,19 @@ int Search::quiescence(Position& position, int alpha, int beta, int ply, int qpl
 
     if (!inCheck)
     {
-        int standPat = Evaluation::evaluate(position);
+        int standPat = Evaluation::evaluate(position, info);
 
         if (standPat >= beta)
         {
-            if (cacheable)
-            {
-                quiescence_tt.store({
-                    key,
-                    static_cast<int16_t>(normalizeToTT(standPat, ply, SearchConfig::MAX_PLY)),
-                    static_cast<uint8_t>(remainingDepth),
-                    TTBound::LOWER_BOUND,
-                    mode
-                });
-            }
+            quiescence_tt.store({
+                key,
+                static_cast<int16_t>(normalizeToTT(standPat, ply, SearchConfig::MAX_PLY)),
+                static_cast<uint8_t>(remainingDepth),
+                TTBound::LOWER_BOUND,
+                mode
+            });
 
-            return standPat;
+            return beta;
         }
 
         if (standPat > alpha)
@@ -275,29 +300,26 @@ int Search::quiescence(Position& position, int alpha, int beta, int ply, int qpl
             alpha = score;
 
         if (alpha >= beta)
-            break;
+            return beta;
     }
 
     if (inCheck && !foundMove)
         return -MATE_SCORE + ply;
 
-    if (cacheable)
-    {
-        TTBound bound = TTBound::EXACT;
+    TTBound bound = TTBound::EXACT;
 
-        if (bestScore <= originalAlpha)
-            bound = TTBound::UPPER_BOUND;
-        else if (bestScore >= beta)
-            bound = TTBound::LOWER_BOUND;
+    if (bestScore <= originalAlpha)
+        bound = TTBound::UPPER_BOUND;
+    else if (bestScore >= beta)
+        bound = TTBound::LOWER_BOUND;
 
-        quiescence_tt.store({
-            key,
-            static_cast<int16_t>(normalizeToTT(bestScore, ply, SearchConfig::MAX_PLY)),
-            static_cast<uint8_t>(remainingDepth),
-            bound,
-            mode
-        });
-    }
+    quiescence_tt.store({
+        key,
+        static_cast<int16_t>(normalizeToTT(bestScore, ply, SearchConfig::MAX_PLY)),
+        static_cast<uint8_t>(remainingDepth),
+        bound,
+        mode
+    });
 
     return bestScore;
 }
