@@ -1,567 +1,90 @@
-#include <algorithm>
 #include <chrono>
-#include <cmath>
 #include <iostream>
-#include <utility>
 
 #include "search.h"
 #include "../move_generation/movegen.h"
 
-namespace
+Search::Search()
 {
-    constexpr int INF = 32000;
-    constexpr int MATE_SCORE = 10000;
-    constexpr int MAX_QUIESCENCE_DEPTH = 8;
-    constexpr int ABSOLUTE_QUIESCENCE_DEPTH = 10;
+    resizeWorkers(settings.threads);
 
-    int normalizeToTT(int score, int ply, int MAX_PLY)
+    if (!openingBook.open("opening_book.bin"))
+        std::cerr << "Failed to load opening book.\n";
+    else
+        std::cout << "Opening book loaded successfully.\n";
+}
+
+Search::~Search()
+{
+    stop();
+
+    workers.clear();
+}
+
+void Search::resizeWorkers(int count)
+{
+    // WILL CHANGE LATER WHENEVER MULTITHREADING IS SUPPORTED
+    // *technically*, you could increase this and have multiple threads. BUT the Transposition Tables aren't multithread safe
+    // and i have no clue what would happen
+    count = 1;
+
+    workers.clear();
+
+    for (int i = 0; i < count; ++i)
     {
-        if (score > MATE_SCORE - MAX_PLY)
-            score += ply;
-        else if (score < -MATE_SCORE + MAX_PLY)
-            score -= ply;
-
-        return score;
-    }
-
-    int normalizeFromTT(int score, int ply, int MAX_PLY)
-    {
-        if (score > MATE_SCORE - MAX_PLY)
-            score -= ply;
-        else if (score < -MATE_SCORE + MAX_PLY)
-            score += ply;
-
-        return score;
-    }
-
-    int calculateReduction(int depth, int moveCount)
-    {
-        int reduction = static_cast<int>(0.75 + (std::log(depth) * std::log(moveCount)) / 2.25);
-
-        return std::clamp(reduction, 1, depth - 1);
+        workers.push_back(
+            std::make_unique<SearchThread>(
+                transposition,
+                quiescence_tt,
+                stopSearch
+            )
+        );
     }
 }
 
-int Search::search(Position& position, int depth, int alpha, int beta, int ply)
+void Search::applySettings(SearchSettings s)
 {
-    if (stopSearch.load(std::memory_order_relaxed))
-        return 0;
+    stop();
 
-    ++nodes;
+    for (auto& worker : workers)
+        worker->join();
 
-    int originalAlpha = alpha;
-    uint64_t key = position.getZobristKey();
-    TTEntry ttEntry;
+    settings = s;
 
-    Move ttMove = NO_MOVE;
+    transposition.resize(settings.hashSize);
+    quiescence_tt.resize(settings.qHashSize);
 
-    if (transposition.probe(key, ttEntry))
-    {
-        ttMove = ttEntry.bestMove;
-        if (ttEntry.depth >= depth)
-        {
-            int ttscore = normalizeFromTT(ttEntry.score, ply, SearchConfig::MAX_PLY);
-            
-            if (ttEntry.bound == TTBound::EXACT) 
-                return ttscore;
-            if (ttEntry.bound == TTBound::LOWER_BOUND) 
-                if (ttscore >= beta) return ttscore;
-            if (ttEntry.bound == TTBound::UPPER_BOUND)
-                if (ttscore <= alpha) return ttscore;
-        }
-    }
-
-    if (ply >= SearchConfig::MAX_PLY - 1)
-    {
-        MoveGenInfo info = MoveGenerator::calculateInfo(position);
-
-        if (info.checkerCount() > 0)
-            return 0;
-
-        return Evaluation::evaluate(position, info);
-    }
-
-    if (depth <= 0)
-        return quiescence(position, alpha, beta, ply);
-        
-    SearchStack& ss = stack[ply];
-
-    MoveGenInfo info = MoveGenerator::calculateInfo(position);
-
-    ss.resetMovePicker();
-
-    int bestScore = -INF;
-    Move bestMove = NO_MOVE;
-    bool foundMove = false;
-
-    Move quietMovesSearched[MoveList::MAX_MOVES];
-    int quietMoveCount = 0;
-
-    int moveCount = 0;
-
-    bool firstMove = true;
-
-    while (true)
-    {
-        Move m = ss.nextMove(position, info, ttMove, heuristics, ply);
-
-        if (m == NO_MOVE)
-            break;
-
-        foundMove = true;
-
-        ++moveCount;
-
-        Square end = MovePacker::getEnd(m);
-        auto flag = MovePacker::getFlag(m);
-        Piece captured = position.getPiece(end);
-        bool quiet = (captured == Pieces::EMPTY && flag != MovePacker::Flag::EN_PASSANT && !MovePacker::isPromotion(flag));
-
-        UndoInfo undo = position.makeMove(m);
-
-        // late move reduction implementation
-        int newDepth = depth - 1;
-        int score;
-
-        bool canReduce = moveCount >= 4 && depth >= 3 && quiet && info.checkerCount() == 0;
-
-        if (firstMove)
-        {
-            // first move search with the full window
-            score = -search(position, newDepth, -beta, -alpha, ply + 1);
-
-            firstMove = false;
-        }
-        else
-        {
-            // everything else we search with a smaller window to see if it could really best the first alpha
-            if (canReduce)
-            {
-                int reduction = calculateReduction(depth, moveCount);
-                int reducedDepth = std::max(0, newDepth - reduction);
-
-                score = -search(position, reducedDepth, -alpha - 1, -alpha, ply + 1);
-
-                // verify at full depth if it looks promising
-                if (score > alpha)
-                {
-                    score = -search(position, newDepth, -alpha - 1, -alpha, ply + 1);
-                }
-            }
-            else
-            {
-                score = -search(position, newDepth, -alpha - 1, -alpha, ply + 1);
-            }
-
-            // if it beats alpha but doesn't cause a cutoff, determine its actual score using a full window
-            if (score > alpha && score < beta)
-            {
-                score = -search(position, newDepth, -beta, -alpha,ply + 1);
-            }
-        }
-
-        position.undoMove(undo);
-
-        if (stopSearch.load(std::memory_order_relaxed))
-            return 0;
-
-        if (score > bestScore)
-        {
-            bestScore = score;
-            bestMove = m;
-        }
-
-        if (score > alpha)
-            alpha = score;
-
-        Square start = MovePacker::getStart(m);
-
-        if (alpha >= beta)
-        {
-            if (quiet)
-            {
-                heuristics.updateKillers(ply, m);
-
-                int bonus = depth * depth;
-
-                heuristics.updateHistory(
-                    position.getSideToMove(),
-                    start,
-                    end,
-                    bonus
-                );
-
-                for (int i = 0; i < quietMoveCount; ++i)
-                {
-                    Move previous = quietMovesSearched[i];
-
-                    heuristics.updateHistory(
-                        position.getSideToMove(),
-                        MovePacker::getStart(previous),
-                        MovePacker::getEnd(previous),
-                        -bonus
-                    );
-                }
-            }
-
-            break;
-        }
-        else if (quiet)
-        {
-            quietMovesSearched[quietMoveCount++] = m;
-        }
-    }
-
-    if (!foundMove)
-    {
-        if (info.checkerCount() > 0)
-            return -MATE_SCORE + ply;
-
-        return 0;
-    }
-
-    // now store in tt
-
-    TTBound bound = TTBound::EXACT;
-
-    if (bestScore <= originalAlpha) bound = TTBound::UPPER_BOUND;
-    else if (bestScore >= beta) bound = TTBound::LOWER_BOUND;
-
-    transposition.store({
-        key,
-        bestMove,
-        static_cast<int16_t>(normalizeToTT(bestScore, ply, SearchConfig::MAX_PLY)),
-        static_cast<uint8_t>(depth),
-        bound
-    });
-
-    return bestScore;
+    resizeWorkers(settings.threads);
 }
 
-int Search::quiescence(Position& position, int alpha, int beta, int ply, int qply)
-{
-    if (stopSearch.load(std::memory_order_relaxed))
-        return 0;
-
-    ++nodes;
-
-    if (ply >= SearchConfig::MAX_PLY - 1)
-        return Evaluation::evaluate(position);
-
-    int originalAlpha = alpha;
-    uint64_t key = position.getZobristKey();
-
-    MoveGenInfo info = MoveGenerator::calculateInfo(position);
-    bool inCheck = info.checkerCount() > 0;
-
-    int remainingDepth = std::max(0, MAX_QUIESCENCE_DEPTH - qply);
-    QTTMode mode = inCheck ? QTTMode::IN_CHECK : QTTMode::NORMAL;
-
-    if (qply >= ABSOLUTE_QUIESCENCE_DEPTH)
-    {
-        MoveList moves;
-        moves.count = 0;
-
-        MoveGenerator::generateLegalMoves(position, info, moves, MoveGenType::ALL);
-
-        if (moves.count == 0)
-        {
-            if (inCheck)
-                return -MATE_SCORE + ply;
-
-            return 0;
-        }
-
-        return Evaluation::evaluate(position, info);
-    }
-
-    QTTEntry ttEntry;
-
-    if (quiescence_tt.probe(key, mode, ttEntry))
-    {
-        if (ttEntry.depth >= remainingDepth)
-        {
-            int ttScore = normalizeFromTT(
-                ttEntry.score,
-                ply,
-                SearchConfig::MAX_PLY
-            );
-
-            if (ttEntry.bound == TTBound::EXACT)
-                return ttScore;
-
-            if (ttEntry.bound == TTBound::LOWER_BOUND)
-                if (ttScore >= beta) return ttScore;
-
-            if (ttEntry.bound == TTBound::UPPER_BOUND)
-                if (ttScore <= alpha) return ttScore;
-        }
-    }
-
-    int bestScore = -INF;
-    int standPat = -INF;
-
-    if (!inCheck)
-    {
-        standPat = Evaluation::evaluate(position, info);
-
-        if (standPat >= beta)
-        {
-            quiescence_tt.store({
-                key,
-                static_cast<int16_t>(normalizeToTT(standPat, ply, SearchConfig::MAX_PLY)),
-                static_cast<uint8_t>(remainingDepth),
-                TTBound::LOWER_BOUND,
-                mode
-            });
-
-            return beta;
-        }
-
-        if (standPat > alpha)
-            alpha = standPat;
-
-        bestScore = standPat;
-
-        if (qply >= MAX_QUIESCENCE_DEPTH)
-            return bestScore;
-    }
-
-    SearchStack& ss = stack[ply];
-    ss.resetMovePicker();
-
-    bool foundMove = false;
-
-    while (true)
-    {
-        Move m = ss.quiescenceNextMove(position, info, inCheck);
-
-        if (m == NO_MOVE)
-            break;
-
-        foundMove = true;
-
-        auto flag = MovePacker::getFlag(m);
-        bool promotion = MovePacker::isPromotion(flag);
-        int capturedValue = MoveOrdering::capturedPieceValue(m, position);
-
-        constexpr int DELTA_MARGIN = 200;
-
-        if (!inCheck && !promotion && capturedValue > 0)
-        {
-            if (standPat + capturedValue + DELTA_MARGIN < alpha)
-                continue;
-        }
-
-        UndoInfo undo = position.makeMove(m);
-
-        int score = -quiescence(position, -beta, -alpha, ply + 1, qply + 1);
-
-        position.undoMove(undo);
-
-        if (stopSearch.load(std::memory_order_relaxed))
-            return 0;
-
-        if (score > bestScore)
-            bestScore = score;
-
-        if (score > alpha)
-            alpha = score;
-
-        if (alpha >= beta)
-            return beta;
-    }
-
-    if (inCheck && !foundMove)
-        return -MATE_SCORE + ply;
-
-    TTBound bound = TTBound::EXACT;
-
-    if (bestScore <= originalAlpha)
-        bound = TTBound::UPPER_BOUND;
-    else if (bestScore >= beta)
-        bound = TTBound::LOWER_BOUND;
-
-    quiescence_tt.store({
-        key,
-        static_cast<int16_t>(normalizeToTT(bestScore, ply, SearchConfig::MAX_PLY)),
-        static_cast<uint8_t>(remainingDepth),
-        bound,
-        mode
-    });
-
-    return bestScore;
-}
-
-Move Search::findBestMove(const Position& position, SearchLimits l)
+SearchResult Search::findBestMove(const Position& position, const SearchLimits& limits)
 {
     stopSearch.store(false, std::memory_order_relaxed);
 
-    Position copy = position;
-    limits = l;
-    nodes = 0;
-
     Move bookMove = NO_MOVE;
-
-    MoveGenInfo info = MoveGenerator::calculateInfo(copy);
+    MoveGenInfo info = MoveGenerator::calculateInfo(position);
 
     if (openingBook.probe(position.getZobristKey(), bookMove))
     {
         if (MoveGenerator::isLegal(position, info, bookMove))
         {
-            if (DEBUG)
-                std::cout << "info string Opening book Move\n";
+            SearchResult result;
+            result.bestMove = bookMove;
 
-            return bookMove;
+            return result;
         }
     }
 
     transposition.newSearch();
     quiescence_tt.newSearch();
-    heuristics.clearKillers();
 
-    uint64_t key = copy.getZobristKey();
-    TTEntry ttEntry;
+    for (auto& worker : workers)
+        worker->start(position, limits);
 
-    Move ttMove = NO_MOVE;
+    for (auto& worker : workers)
+        worker->wait();
 
-    if (transposition.probe(key, ttEntry))
-        ttMove = ttEntry.bestMove;
-
-    Move bestMove = NO_MOVE;
-
-    int maxDepth = limits.depth > 0 ? limits.depth : 64;
-
-    int previousScore = 0;
-    int aspirationWindow = 25;
-
-    for (int depth = 1; depth <= maxDepth; ++depth)
-    {
-        auto iterationStart = std::chrono::steady_clock::now();
-
-        if (stopSearch.load(std::memory_order_relaxed))
-            break;
-
-        int alpha = -INF;
-        int beta = INF;
-
-        if (depth >= 2)
-        {
-            alpha = previousScore - aspirationWindow;
-            beta = previousScore + aspirationWindow;
-        }
-
-        Move iterationBestMove = NO_MOVE;
-        int bestScore = -INF;
-
-        while (true)
-        {
-            SearchStack& root = stack[0];
-            root.resetMovePicker();
-
-            bestScore = -INF;
-            iterationBestMove = NO_MOVE;
-
-            int currentAlpha = alpha;
-
-            bool firstMove = true;
-
-            while (true)
-            {
-                Move m = root.nextMove(copy, info, ttMove, heuristics, 0);
-
-                if (m == NO_MOVE)
-                    break;
-
-                UndoInfo undo = copy.makeMove(m);
-
-                int score;
-
-                if (firstMove)
-                {
-                    score = -search(copy, depth - 1, -beta, -currentAlpha, 1);
-
-                    firstMove = false;
-                }
-                else
-                {
-                    score = -search(copy, depth - 1, -currentAlpha - 1, -currentAlpha, 1);
-
-                    if (score > currentAlpha && score < beta)
-                    {
-                        score = -search(copy, depth - 1, -beta, -currentAlpha, 1);
-                    }
-                }
-
-                copy.undoMove(undo);
-
-                if (stopSearch.load(std::memory_order_relaxed))
-                    break;
-
-                if (score > bestScore)
-                {
-                    bestScore = score;
-                    iterationBestMove = m;
-                }
-
-                if (score > currentAlpha)
-                    currentAlpha = score;
-            }
-
-
-            if (stopSearch.load(std::memory_order_relaxed))
-                break;
-
-            if (bestScore <= alpha)
-            {
-                alpha -= aspirationWindow;
-                aspirationWindow *= 2;
-                continue;
-            }
-
-            if (bestScore >= beta)
-            {
-                beta += aspirationWindow;
-                aspirationWindow *= 2;
-                continue;
-            }
-
-            break;
-        }
-
-        if (stopSearch.load(std::memory_order_relaxed))
-            break;
-
-        bestMove = iterationBestMove;
-        ttMove = bestMove;
-        previousScore = bestScore;
-
-        aspirationWindow = 25;
-
-        auto iterationEnd = std::chrono::steady_clock::now();
-
-        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(iterationEnd - iterationStart).count();
-
-        if (DEBUG)
-        {
-            std::cout
-                << "info depth " << depth
-                << " score cp " << bestScore
-                << " nodes " << nodes
-                << " time " << elapsed
-                << std::endl;
-        }
-    }
-
-    return bestMove;
-}
-
-Search::Search()
-{
-    if (!openingBook.open("opening_book.bin"))
-        std::cerr << "Failed to load opening book.\n";
-    else
-        std::cout << "Opening book loaded successfully.\n";
+    return workers[0]->getResult();
 }
 
 void Search::stop()

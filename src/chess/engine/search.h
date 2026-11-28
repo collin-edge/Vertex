@@ -1,65 +1,39 @@
 #pragma once
 
 #include <atomic>
+#include <memory>
 #include <vector>
 
-#include "search_config.h"
-#include "evaluation/evaluation.h"
+#include "search_types.h"
 #include "../position.h"
-#include "../moves.h"
-#include "move_ordering.h"
 #include "objects/transposition_tables.h"
-#include "objects/search_stack.h"
-#include "objects/search_heuristics.h"
 #include "opening_book/opening_book.h"
-
-struct SearchLimits
-{
-    int wtime = -1;
-    int btime = -1;
-
-    int winc = 0;
-    int binc = 0;
-
-    int movesToGo = 0;
-
-    int depth = -1;
-    int mate = 0;
-
-    uint64_t nodes = 0;
-
-    int moveTime = -1;
-
-    bool infinite = false;
-    bool ponder = false;
-
-    int threads = 1;
-
-    std::vector<Move> searchMoves;
-};
+#include "search_thread.h"
 
 class Search
 {
 private:
     std::atomic<bool> stopSearch = false;
-    SearchLimits limits;
-    uint64_t nodes = 0;
-    int currentDepth = 0;
 
-    SearchStack stack[SearchConfig::MAX_PLY];
-    SearchHeuristics heuristics;
-    TranspositionTable transposition{64};
-    QuiescenceTranspositionTable quiescence_tt{8};
+    SearchSettings settings;
+
+    TranspositionTable transposition{settings.hashSize};
+    QuiescenceTranspositionTable quiescence_tt{settings.qHashSize};
+
+    std::vector<std::unique_ptr<SearchThread>> workers;
 
     OpeningBook openingBook;
 
-    int search(Position& position, int depth, int alpha, int beta, int ply = 0);
-    int quiescence(Position& position, int alpha, int beta, int ply, int qply = 0);
+    void resizeWorkers(int count);
 
 public:
     Search();
+    ~Search();
 
-    Move findBestMove(const Position& position, SearchLimits l);
+    void applySettings(SearchSettings settings);
+
+    SearchResult findBestMove(const Position& position, const SearchLimits& limits);
+
     void stop();
 
     bool DEBUG = true;

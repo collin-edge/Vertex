@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../search_config.h"
+#include "../search_types.h"
 #include "../../types.h"
 
 class SearchHeuristics

@@ -5,6 +5,7 @@
 #include "../chess/position.h"
 #include <thread>
 #include "../chess/engine/search.h"
+#include "../chess/engine/search_types.h"
 
 using UCIMove = std::string;
 
@@ -21,6 +22,8 @@ private:
     Search search;
     std::thread searchThread;
 
+    SearchSettings settings;
+
 public:
     UCI(Position& pos);
     ~UCI();
@@ -30,5 +33,5 @@ public:
 private:
     bool parsePositionCommand(std::istringstream& token);
     bool parseGoCommand(std::istringstream& token);
-    // TODO: add some options probably       bool parseSetOptionCommand(std::istringstream& token);
+    bool parseSetOptionCommand(std::istringstream& token);
 };

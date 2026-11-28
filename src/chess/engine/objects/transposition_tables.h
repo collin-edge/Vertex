@@ -2,7 +2,6 @@
 #pragma once
 
 #include <vector>
-#include <cstddef>
 #include <cstdint>
 #include <cassert>
 #include <climits>
@@ -65,9 +64,7 @@ private:
 public:
     TranspositionTable(std::size_t sizeMB)
     {
-        assert(sizeMB > 0);
-
-        clusters.resize((sizeMB * 1024 * 1024) / sizeof(Cluster));
+        resize(sizeMB);
     }
 
     void newSearch()
@@ -159,6 +156,16 @@ public:
 
         generation = 0;
     }
+
+    void resize(std::size_t sizeMB)
+    {
+        assert(sizeMB > 0);
+
+        std::vector<Cluster> newClusters((sizeMB * 1024 * 1024) / sizeof(Cluster));
+
+        clusters.swap(newClusters);
+        generation = 0;
+    }
 };
 
 // quiescence tables
@@ -215,9 +222,7 @@ private:
 public:
     explicit QuiescenceTranspositionTable(std::size_t sizeMB)
     {
-        assert(sizeMB > 0);
-
-        clusters.resize((sizeMB * 1024 * 1024) / sizeof(QTTCluster));
+        resize(sizeMB);
     }
 
     void newSearch()
@@ -307,6 +312,16 @@ public:
             }
         }
 
+        generation = 0;
+    }
+
+    void resize(std::size_t sizeMB)
+    {
+        assert(sizeMB > 0);
+
+        std::vector<QTTCluster> newClusters((sizeMB * 1024 * 1024) / sizeof(QTTCluster));
+
+        clusters.swap(newClusters);
         generation = 0;
     }
 };

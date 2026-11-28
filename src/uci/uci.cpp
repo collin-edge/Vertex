@@ -93,7 +93,16 @@ bool UCI::receiveCommand(const std::string& line)
     {
         std::cout << "id name Vertex\n";
         std::cout << "id author Collin Edge\n";
+
+        std::cout << "option name Hash type spin default 64 min 1 max 4096\n";
+        std::cout << "option name QHash type spin default 8 min 1 max 4096\n";
+        std::cout << "option name Threads type spin default 1 min 1 max 1\n";
+
         std::cout << "uciok" << std::endl;
+    }
+    else if (command == "setoption")
+    {
+        return parseSetOptionCommand(token);
     }
     else if (command == "debug")
     {
@@ -101,6 +110,14 @@ bool UCI::receiveCommand(const std::string& line)
     }
     else if (command == "isready")
     {
+        if (searchThread.joinable())
+        {
+            search.stop();
+            searchThread.join();
+        }
+        
+        search.applySettings(settings);
+
         std::cout << "readyok" << std::endl;
     }
     else if (command == "go")
@@ -296,10 +313,73 @@ bool UCI::parseGoCommand(std::istringstream& token)
 
     searchThread = std::thread([this, searchPosition, limits]() mutable
     {
-        Move bestMove = search.findBestMove(searchPosition, limits);
+        SearchResult result = search.findBestMove(searchPosition, limits);
+        Move bestMove = result.bestMove;
 
         std::cout << "bestmove " << moveToUCI(bestMove) << std::endl;
     });
+
+    return true;
+}
+
+bool UCI::parseSetOptionCommand(std::istringstream& token)
+{
+    std::string keyword;
+    std::string name;
+    std::string value;
+
+    if (!(token >> keyword) || keyword != "name")
+        return false;
+
+    while (token >> keyword && keyword != "value")
+    {
+        if (!name.empty())
+            name += ' ';
+
+        name += keyword;
+    }
+
+    if (keyword != "value")
+        return false;
+
+    if (!(token >> value))
+        return false;
+
+    try
+    {
+        int number = std::stoi(value);
+
+        if (name == "Hash")
+        {
+            if (number < 1 || number > 4096)
+                return false;
+
+            settings.hashSize = number;
+        }
+        else if (name == "QHash")
+        {
+            if (number < 1 || number > 4096)
+                return false;
+
+            settings.qHashSize = number;
+        }
+        else if (name == "Threads")
+        {
+            if (number != 1)
+                return false;
+
+            settings.threads = number;
+        }
+        else
+        {
+            std::cerr << "Unknown option: " << name << '\n';
+            return false;
+        }
+    }
+    catch (...)
+    {
+        return false;
+    }
 
     return true;
 }
